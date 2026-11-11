@@ -7,7 +7,7 @@ interface Props {
   onCreated: (t: Task) => void;
 }
 
-/** An empty chat with the orchestrator. The first message starts the task. */
+/** An empty chat with the orchestrator. The first message starts the task; its worktree comes once work starts. */
 export function NewChat({ project, onCreated }: Props) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -36,7 +36,7 @@ export function NewChat({ project, onCreated }: Props) {
       </header>
       <div className="transcript-scroll">
         <p className="muted">
-          {busy ? 'Creating worktree and starting the orchestrator…' : 'Tell the orchestrator what you want done.'}
+          {busy ? 'Starting the orchestrator…' : 'Ask the orchestrator something, or tell it what you want done.'}
         </p>
       </div>
       <footer className="composer">

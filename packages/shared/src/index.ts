@@ -242,7 +242,11 @@ export interface Task {
   plan: TaskPlan | null;
   baseBranch: string;
   branch: string;
-  worktreePath: string;
+  /**
+   * The task worktree on `branch`. Null until the orchestrator starts work
+   * (start_planning / start_work): a request it just answers never gets one.
+   */
+  worktreePath: string | null;
   agents: TaskAgent[];
   question: TaskQuestion | null;
   report: string | null;

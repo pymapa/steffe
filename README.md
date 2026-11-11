@@ -81,10 +81,14 @@ needed from you), **Ready for handoff** (your turn: a reply, a plan or design
 to approve, a question, or a finished result) or **Paused** (resume to
 continue). The detail next to it says what's waiting.
 
-0. **Triage.** Steffe creates the branch `steffe/<slug>-<id>` in its
-   own worktree under `~/.steffe/worktrees/<task>/task`, then starts the
-   orchestrator with your request. It reads the relevant code (and may ask you
-   a quick question) to size the work, then picks a route:
+0. **Triage.** Steffe starts the orchestrator with your request in the
+   project's main checkout, read only. It reads the relevant code (and may ask
+   you a quick question) to size the work, then picks a route:
+   - **Question** ("what is in X", "how does Y work"): it answers in chat. No
+     branch or worktree is created.
+
+   Every other route creates the branch `steffe/<slug>-<id>` in its own
+   worktree under `~/.steffe/worktrees/<task>/task` first:
    - **Design only** ("just the design"): `start_work` with one design item,
      and a designer starts right away. After you approve the design, the
      orchestrator asks whether to build it now (`add_items` adds the code

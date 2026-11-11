@@ -19,9 +19,11 @@ memory) and tasks. A plain session's cwd is its project's path.
 Tasks (`packages/server/src/tasks.ts`, persisted in `~/.steffe/tasks/`) are
 teams of agent sessions working in git worktrees under `~/.steffe/worktrees/`.
 The orchestrator is the user's only contact and the hub: it starts every task
-in `triage` and routes it to an autonomous planner (`start_planning`; the user
+in `triage`, in the project's main checkout (read only), with no branch or
+worktree. It answers questions in chat, or routes a change request to an autonomous planner (`start_planning`; the user
 approves the plan in chat via `approve_plan` or in the UI) or, when trivial or
-design only, straight to execution (`start_work`). Every other agent runs
+design only, straight to execution (`start_work`). Either one creates the task
+branch and worktree. Every other agent runs
 autonomously; its `report`s and `ask_orchestrator` questions are delivered to
 the orchestrator as user messages. Roles live in `roles/*.md`, shared skills in `plugin/skills/`.
 They stay project-agnostic; project knowledge comes from the target repo's

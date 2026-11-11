@@ -199,9 +199,8 @@ export class TaskManager {
     const id = randomUUID();
     const title = (req.title?.trim() || req.prompt.split('\n')[0]).slice(0, 80);
     const baseBranch = await defaultBaseBranch(project.path);
+    // Only the name: the branch and its worktree are created when the orchestrator starts work.
     const branch = `steffe/${slugify(title)}-${id.slice(0, 6)}`;
-    const worktreePath = join(WORKTREES_DIR, id, 'task');
-    await addWorktree(project.path, worktreePath, branch, await startPoint(project.path, baseBranch));
 
     const task: Task = {
       id,
@@ -214,7 +213,7 @@ export class TaskManager {
       plan: null,
       baseBranch,
       branch,
-      worktreePath,
+      worktreePath: null,
       agents: [],
       question: null,
       report: null,
@@ -228,7 +227,7 @@ export class TaskManager {
     this.tasks.set(id, task);
     await this.persist(task);
     const prompt = [
-      `[steffe] New task from the user. Triage it: hand it to a planner (start_planning) or, if it is trivial, set a small plan and go straight to a developer (start_work).`,
+      `[steffe] New message from the user. If it is a question or a request to look into something, answer it in chat: you are in the user's main checkout, read only, and no worktree exists yet. If it asks for changes, triage it: hand it to a planner (start_planning) or, if it is trivial, set a small plan and go straight to a developer (start_work). Either one creates the task branch and worktree.`,
       ``,
       `# Task: ${title}`,
       ``,
@@ -237,9 +236,24 @@ export class TaskManager {
       ``,
       await this.rolesText(),
     ].join('\n');
-    await this.startAgent(task, 'orchestrator', { cwd: worktreePath, itemId: null, prompt });
+    await this.startAgent(task, 'orchestrator', { cwd: project.path, itemId: null, prompt });
     this.changed(task);
     return task;
+  }
+
+  /** Create the task branch and worktree the first time work starts. */
+  private async ensureWorktree(task: Task): Promise<string> {
+    if (task.worktreePath) return task.worktreePath;
+    const project = this.project(task);
+    const path = join(WORKTREES_DIR, task.id, 'task');
+    await addWorktree(project.path, path, task.branch, await startPoint(project.path, task.baseBranch));
+    task.worktreePath = path;
+    return path;
+  }
+
+  private worktree(task: Task): string {
+    if (!task.worktreePath) throw new Error('no work has started on this task (start_planning or start_work creates its worktree)');
+    return task.worktreePath;
   }
 
   private async rolesText(): Promise<string> {
@@ -296,7 +310,7 @@ export class TaskManager {
       if (!orch.claudeSessionId) this.live.get(task.id)?.get('orchestrator')?.send(prompt);
     } else {
       // Tasks created before triage existed have no orchestrator yet.
-      await this.startAgent(task, 'orchestrator', { cwd: task.worktreePath, itemId: null, prompt });
+      await this.startAgent(task, 'orchestrator', { cwd: this.worktree(task), itemId: null, prompt });
     }
     this.changed(task);
     return task;
@@ -399,8 +413,9 @@ export class TaskManager {
       for (const item of task.plan?.items ?? []) {
         if (item.worktreePath) await removeWorktree(project.path, item.worktreePath);
       }
-      await removeWorktree(project.path, task.worktreePath);
-      if (opts.deleteBranches) warnings.push(...(await this.deleteBranches(project.path, task)));
+      if (task.worktreePath) await removeWorktree(project.path, task.worktreePath);
+      // Without a worktree the task branch was never created.
+      if (opts.deleteBranches && task.worktreePath) warnings.push(...(await this.deleteBranches(project.path, task)));
     }
     await rm(join(WORKTREES_DIR, task.id), { recursive: true, force: true });
     await rm(join(TASKS_DIR, `${task.id}.json`), { force: true });
@@ -509,8 +524,11 @@ export class TaskManager {
       `- You are: **${agent.name}** (role ${agent.role})${item ? `, working on item \`${item.id}\` (${item.title})` : ''}`,
       `- Working directory: ${agent.cwd}`,
       `- Task branch: ${task.branch} (base: ${task.baseBranch})${item?.branch ? `; your item branch: ${item.branch}` : ''}`,
+      `- Task worktree: ${task.worktreePath ?? 'none yet (start_planning or start_work creates it)'}`,
       agent.port != null ? `- Your private port: ${agent.port} (env PORT; ${agent.port + 1}-${agent.port + 9} are yours too)` : '',
-      `- The user's main checkout at ${project.path} is off-limits: don't edit it, run things from it, or touch anything running from it.`,
+      agent.cwd === project.path
+        ? `- Your working directory is the user's main checkout: read only. Don't edit it, switch branches, run the app from it, or touch anything running from it.`
+        : `- The user's main checkout at ${project.path} is off-limits: don't edit it, run things from it, or touch anything running from it.`,
       `- Files to hand over (screenshots): ${artifacts} (env STEFFE_ARTIFACTS). Playwright screenshots are saved there.`,
       `- Steffe tools are named mcp__steffe__<tool>.`,
     ]
@@ -696,12 +714,13 @@ export class TaskManager {
         run(async (t) => `Plan approved; the task is now executing. Execute it:\n\n${await this.approvePlan(t)}`),
       addItems: (items) => run((t) => this.addItems(t, items)),
       startWork: (spec, items) =>
-        run((t) => {
+        run(async (t) => {
           if (t.phase !== 'triage') throw new Error(`start_work is a triage decision; the task is ${t.phase}`);
           if (!items.length) throw new Error('the plan needs at least one work item');
           this.setPlan(t, spec, items);
+          const wt = await this.ensureWorktree(t);
           t.phase = 'executing';
-          return `Plan set with ${items.length} item(s); the task is now executing. Spawn the developer(s) now.`;
+          return `Plan set with ${items.length} item(s) and the task worktree created at ${wt} on ${t.branch}; the task is now executing. Spawn the developer(s) now.`;
         }),
       spawnAgent: (role, itemId, brief) => run((t) => this.spawnAgent(t, role, itemId, brief)),
       messageAgent: (name, text) => run((t) => this.messageAgent(t, name, text)),
@@ -786,9 +805,10 @@ export class TaskManager {
 
   private async startPlanning(task: Task, brief: string): Promise<string> {
     if (task.phase !== 'triage') throw new Error(`start_planning is a triage decision; the task is ${task.phase}`);
+    const cwd = await this.ensureWorktree(task);
     task.phase = 'planning';
     await this.startAgent(task, 'planner', {
-      cwd: task.worktreePath,
+      cwd,
       itemId: null,
       prompt: [
         `The orchestrator handed you this task. Turn it into a plan. You work unattended: ask the orchestrator (ask_orchestrator) what only the user can tell you, and report when the plan is ready.`,
@@ -853,7 +873,7 @@ export class TaskManager {
     }
     const project = this.project(task);
 
-    let cwd = task.worktreePath;
+    let cwd = this.worktree(task);
     if (item && role.writable === 'cwd' && item.mode === 'worktree' && !item.worktreePath) {
       item.branch = `${task.branch}--${item.id}`;
       item.worktreePath = join(WORKTREES_DIR, task.id, 'items', item.id);
@@ -923,22 +943,23 @@ export class TaskManager {
 
   private async mergeItem(task: Task, itemId: string): Promise<string> {
     const item = this.item(task, itemId);
+    const wt = this.worktree(task);
     if (item.kind === 'design') {
       throw new Error(`item ${itemId} is a design: mocks are never merged. Mark it done with update_item once the user approves it.`);
     }
     if (item.status === 'merged' || item.status === 'done') return `Item ${itemId} is already merged.`;
     if (item.mode === 'shared' || !item.branch || !item.worktreePath) {
-      const dirty = await statusPorcelain(task.worktreePath);
+      const dirty = await statusPorcelain(wt);
       if (dirty) throw new Error(`shared item: the task worktree has uncommitted changes; have the developer commit them:\n${dirty}`);
       item.status = 'merged';
       return `Item ${itemId} works on the task branch directly; nothing to merge. Marked merged.`;
     }
     const dirty = await statusPorcelain(item.worktreePath);
     if (dirty) throw new Error(`the item worktree has uncommitted changes; have the developer commit them first:\n${dirty}`);
-    if ((await commitsAhead(task.worktreePath, task.branch, item.branch)) === 0) {
+    if ((await commitsAhead(wt, task.branch, item.branch)) === 0) {
       throw new Error(`branch ${item.branch} has no commits that aren't on ${task.branch}`);
     }
-    const res = await mergeBranch(task.worktreePath, item.branch, `Merge ${item.id}: ${item.title}`);
+    const res = await mergeBranch(wt, item.branch, `Merge ${item.id}: ${item.title}`);
     if (!res.ok) {
       return `Merge conflict in: ${res.conflicts.join(', ') || '(see output)'}. The merge was aborted. Ask the developer to merge ${task.branch} into ${item.branch}, resolve the conflicts, commit, and report; then retry merge_item.\n\n${res.output}`;
     }
@@ -980,16 +1001,17 @@ export class TaskManager {
     if (busy.length) throw new Error(`agents still working: ${busy.map((a) => a.name).join(', ')}`);
     const items = task.plan?.items ?? [];
     if (items.length && items.every((i) => i.kind === 'design')) return this.finishDesignOnly(task, prTitle, report);
-    const dirty = await statusPorcelain(task.worktreePath);
+    const wt = this.worktree(task);
+    const dirty = await statusPorcelain(wt);
     if (dirty) throw new Error(`the task worktree has uncommitted changes:\n${dirty}`);
-    const base = (await tryGit(task.worktreePath, 'rev-parse', '--verify', `origin/${task.baseBranch}`)).ok
+    const base = (await tryGit(wt, 'rev-parse', '--verify', `origin/${task.baseBranch}`)).ok
       ? `origin/${task.baseBranch}`
       : task.baseBranch;
-    if ((await commitsAhead(task.worktreePath, base, task.branch)) === 0) {
+    if ((await commitsAhead(wt, base, task.branch)) === 0) {
       throw new Error(`${task.branch} has no commits on top of ${task.baseBranch}`);
     }
     // Only lines this task adds: the marker may legitimately exist in the base (e.g. Steffe's own source).
-    const diff = await tryGit(task.worktreePath, 'diff', '-U0', `${base}...${task.branch}`);
+    const diff = await tryGit(wt, 'diff', '-U0', `${base}...${task.branch}`);
     const mock = diff.out.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++') && (l.includes(MOCK_MARKER) || l.includes(LEGACY_MOCK_MARKER)));
     if (mock.length) {
       throw new Error(
@@ -1004,18 +1026,18 @@ export class TaskManager {
     await writeFile(join(TASKS_DIR, `${task.id}.report.md`), `# ${prTitle}\n\n${report}\n`);
 
     let result: string;
-    const hasRemote = (await tryGit(task.worktreePath, 'remote', 'get-url', 'origin')).ok;
+    const hasRemote = (await tryGit(wt, 'remote', 'get-url', 'origin')).ok;
     if (!hasRemote) {
-      result = `The repo has no origin remote, so no PR was opened. The report is saved and ${task.branch} is ready to test locally at ${task.worktreePath}.`;
+      result = `The repo has no origin remote, so no PR was opened. The report is saved and ${task.branch} is ready to test locally at ${wt}.`;
     } else {
-      const push = await tryGit(task.worktreePath, 'push', '-u', 'origin', task.branch);
+      const push = await tryGit(wt, 'push', '-u', 'origin', task.branch);
       if (!push.ok) {
         task.phase = 'executing';
         throw new Error(`git push failed:\n${push.out}`);
       }
       try {
         const footer = `\n\n---\n_Opened by Steffe task "${task.title}" · ${task.plan?.items.length ?? 0} work items · $${task.totalCostUsd.toFixed(2)} agent cost_`;
-        task.prUrl = await createPullRequest(task.worktreePath, {
+        task.prUrl = await createPullRequest(wt, {
           base: task.baseBranch,
           head: task.branch,
           title: prTitle,

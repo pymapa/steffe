@@ -81,8 +81,8 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
       <header className="session-header">
         <div>
           <h2>{task.title}</h2>
-          <div className="meta mono task-path" title={task.worktreePath}>
-            {task.branch} ← {task.baseBranch}
+          <div className="meta mono task-path" title={task.worktreePath ?? undefined}>
+            {task.worktreePath ? `${task.branch} ← ${task.baseBranch}` : `${task.baseBranch} · no worktree yet`}
           </div>
         </div>
         <div className="actions">
