@@ -17,6 +17,7 @@ import {
   addWorktree,
   commitsAhead,
   defaultBaseBranch,
+  git,
   isGitRepo,
   mergeBranch,
   removeWorktree,
@@ -28,6 +29,7 @@ import { closePullRequest, createPullRequest } from './github.js';
 import { claimPort, releasePort, reservePort, stopListeners } from './ports.js';
 import type { ProjectStore } from './projects.js';
 import { PLUGIN_DIR, getRole, loadRoles } from './roles.js';
+import { SETUP_ROLE, wiringText } from './projectSetup.js';
 import type { ManagedSession } from './session.js';
 import type { SessionManager } from './sessionManager.js';
 
@@ -257,7 +259,7 @@ export class TaskManager {
   }
 
   private async rolesText(): Promise<string> {
-    const roles = [...(await loadRoles()).values()].filter((r) => !SINGLETON_ROLES.has(r.name));
+    const roles = [...(await loadRoles()).values()].filter((r) => !SINGLETON_ROLES.has(r.name) && r.name !== SETUP_ROLE);
     return [`## Roles you can spawn`, ...roles.map((r) => `- **${r.name}**: ${r.description}`)].join('\n');
   }
 
@@ -391,6 +393,32 @@ export class TaskManager {
     for (const name of [...(this.live.get(task.id)?.keys() ?? [])]) await this.stopAgent(task, name);
     task.phase = 'cancelled';
     this.changed(task);
+    return task;
+  }
+
+  /**
+   * Hand a finished task over to the user: stop its agents, remove the task worktree and check
+   * the task branch out in the project's main checkout. Refuses while either side has
+   * uncommitted changes, so nothing is lost and the checkout cannot fail halfway.
+   */
+  async handoff(id: string): Promise<Task> {
+    const task = this.must(id);
+    if (task.phase !== 'done') throw new Error(`task is ${task.phase}, not done`);
+    const wt = this.worktree(task);
+    const project = this.project(task);
+    const dirty = await statusPorcelain(wt);
+    if (dirty) throw new Error(`the task worktree has uncommitted changes:\n${dirty}`);
+    const mainDirty = await git(project.path, 'status', '--porcelain', '--untracked-files=no');
+    if (mainDirty) throw new Error(`the project checkout has uncommitted changes; commit or stash them first:\n${mainDirty}`);
+
+    for (const name of [...(this.live.get(task.id)?.keys() ?? [])]) await this.stopAgent(task, name);
+    const removed = await tryGit(project.path, 'worktree', 'remove', wt);
+    if (!removed.ok) throw new Error(`removing the task worktree failed:\n${removed.out}`);
+    await tryGit(project.path, 'worktree', 'prune');
+    task.worktreePath = null;
+    this.changed(task);
+    const checkout = await tryGit(project.path, 'checkout', task.branch);
+    if (!checkout.ok) throw new Error(`the worktree is removed, but checking out ${task.branch} failed:\n${checkout.out}`);
     return task;
   }
 
@@ -534,6 +562,8 @@ export class TaskManager {
     ]
       .filter(Boolean)
       .join('\n');
+    // How this role uses the project's own agents and skills (project setup).
+    const wiring = wiringText(project, agent.role);
 
     const allowed = [...role.tools];
     const session = this.sessions.create(
@@ -550,7 +580,7 @@ export class TaskManager {
       {
         taskId: task.id,
         role: agent.role,
-        systemPromptAppend: `${role.prompt}\n${context}`,
+        systemPromptAppend: wiring ? `${role.prompt}\n${context}\n\n${wiring}` : `${role.prompt}\n${context}`,
         mcpServers: {
           steffe: steffeServer(this.toolHost(task.id, agent.name), allowed),
           ...(role.mcp.includes('playwright') ? { playwright: playwrightMcp(artifacts) } : {}),
@@ -861,7 +891,7 @@ export class TaskManager {
 
   private async spawnAgent(task: Task, roleName: string, itemId: string | null, brief: string): Promise<string> {
     if (task.phase !== 'executing' && task.phase !== 'escalated') throw new Error(`task is ${task.phase}`);
-    if (SINGLETON_ROLES.has(roleName)) throw new Error(`cannot spawn a ${roleName}`);
+    if (SINGLETON_ROLES.has(roleName) || roleName === SETUP_ROLE) throw new Error(`cannot spawn a ${roleName}`);
     const role = await getRole(roleName);
     const item = itemId ? this.item(task, itemId) : undefined;
     if (roleName === 'designer' && item?.kind !== 'design') throw new Error('a designer needs a design item (kind "design")');

@@ -10,6 +10,7 @@ import { ProjectTabs } from './components/ProjectTabs';
 import { NewChat } from './components/NewChat';
 import { SessionView } from './components/SessionView';
 import { TaskView } from './components/TaskView';
+import { SetupView, setupSession } from './components/SetupView';
 import { PullRequests } from './components/PullRequests';
 import { PullRequestView } from './components/PullRequestView';
 import { PrColumn } from './components/PrColumn';
@@ -78,9 +79,10 @@ export function App() {
   }
 
   const openProject = async (path: string) => {
-    const p = await api.openProject({ path });
+    const { project: p, created } = await api.openProject({ path });
     setOpening(false);
-    select({ kind: 'new-task' }, p.id);
+    // A new project starts with the setup agent's proposal for its agents and skills.
+    select(created ? { kind: 'setup' } : { kind: 'new-task' }, p.id);
   };
 
   const recentPaths = [...new Set(state.projects.map((p) => p.path))];
@@ -110,6 +112,19 @@ export function App() {
         session={session}
         transcript={state.transcripts[session.id] ?? []}
         permissions={state.permissions.filter((p) => p.sessionId === session.id)}
+      />
+    );
+  } else if (selection.kind === 'setup') {
+    main = (
+      <SetupView
+        key={project.id}
+        project={project}
+        catalog={catalog}
+        session={setupSession(project.id, state.sessions)}
+        transcripts={state.transcripts}
+        permissions={state.permissions}
+        ensureTranscript={(id) => void ensureTranscript(id)}
+        onOpenEntry={(entryKind, name) => select({ kind: 'catalog', entryKind, source: 'project', name })}
       />
     );
   } else if (selection.kind === 'catalog') {

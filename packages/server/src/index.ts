@@ -9,6 +9,7 @@ import type {
   CreateCatalogEntryRequest,
   SaveCatalogEntryRequest,
   CreateProjectRequest,
+  OpenProjectResult,
   CreateTaskRequest,
   CreateSessionRequest,
   SendMessageRequest,
@@ -24,11 +25,14 @@ import { readHistory } from './session.js';
 import { getPullRequest, listPullRequests } from './github.js';
 import { loadRoles } from './roles.js';
 import { createCatalogEntry, loadCatalog, saveCatalogEntry } from './catalog.js';
+import { ProjectSetupManager } from './projectSetup.js';
+import { isGitRepo } from './git.js';
 
 const PORT = Number(process.env.PORT ?? 4010);
 const manager = new SessionManager();
 const projects = new ProjectStore();
 const tasks = new TaskManager(manager, projects);
+const setup = new ProjectSetupManager(manager, projects);
 const app = new Hono();
 
 app.get('/api/health', (c) => c.json({ ok: true }));
@@ -59,19 +63,38 @@ app.post('/api/projects', async (c) => {
   const body = (await c.req.json()) as CreateProjectRequest;
   if (!body.path) return c.json({ error: 'path is required' }, 400);
   try {
-    const project = await projects.open(body);
-    manager.broadcast({ type: 'project.updated', project });
-    return c.json(project, 201);
+    const result = await projects.open(body);
+    manager.broadcast({ type: 'project.updated', project: result.project });
+    // A new project: propose how Steffe's roles should use its agents and skills.
+    if (result.created && (await isGitRepo(result.project.path))) {
+      setup.analyze(result.project.id).catch((err) => console.error(`[steffe] setup failed to start: ${String(err)}`));
+    }
+    return c.json(result satisfies OpenProjectResult, result.created ? 201 : 200);
   } catch (err) {
     return c.json({ error: String(err) }, 400);
   }
 });
+
+const setupAction = (fn: (projectId: string) => Promise<unknown>) => async (c: import('hono').Context) => {
+  try {
+    return c.json(await fn(c.req.param('id')!));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: msg }, msg === 'project not found' ? 404 : 409);
+  }
+};
+
+app.post('/api/projects/:id/setup/analyze', setupAction((id) => setup.analyze(id)));
+app.post('/api/projects/:id/setup/accept', setupAction((id) => setup.accept(id)));
+app.post('/api/projects/:id/setup/dismiss', setupAction((id) => setup.dismiss(id)));
+app.delete('/api/projects/:id/setup', setupAction((id) => setup.clear(id)));
 
 app.delete('/api/projects/:id', async (c) => {
   const id = c.req.param('id');
   if (tasks.list().some((t) => t.projectId === id)) {
     return c.json({ error: 'delete the project\'s tasks first' }, 409);
   }
+  setup.stop(id);
   for (const s of manager.list()) if (s.req.projectId === id) manager.remove(s.id);
   if (!(await projects.remove(id))) return c.json({ error: 'not found' }, 404);
   manager.broadcast({ type: 'project.removed', projectId: id });
@@ -204,6 +227,7 @@ app.post('/api/tasks/:id/approve', taskAction((id) => tasks.approve(id)));
 app.post('/api/tasks/:id/pause', taskAction((id) => tasks.pause(id)));
 app.post('/api/tasks/:id/resume', taskAction((id) => tasks.resume(id)));
 app.post('/api/tasks/:id/cancel', taskAction((id) => tasks.cancel(id)));
+app.post('/api/tasks/:id/handoff', taskAction((id) => tasks.handoff(id)));
 app.post(
   '/api/tasks/:id/answer',
   taskAction((id, body) => {

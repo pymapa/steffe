@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import type { TranscriptEntry } from '@steffe/shared';
 import { useFollowTail } from '../lib/useFollowTail';
 import { useResizable } from '../lib/useResizable';
+import { Markdown } from './Markdown';
 
 /**
  * A session split in two: the conversation (user and assistant text) and the
@@ -80,13 +81,15 @@ function Pane({ resetKey, className, header, children }: {
 
 interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  /** notice: a one-line stand-in for a Steffe message; its full text is in the event flow. */
+  role: 'user' | 'assistant' | 'notice';
   text: string;
 }
 
 type FlowEvent =
   | { kind: 'thinking'; key: string; at: string; text: string }
   | { kind: 'system'; key: string; at: string; text: string }
+  | { kind: 'steffe'; key: string; at: string; title: string; text: string }
   | { kind: 'tool'; key: string; at: string; name: string; input: unknown; result: ToolResult | null }
   | { kind: 'orphan_result'; key: string; at: string; result: ToolResult };
 
@@ -131,9 +134,38 @@ function split(entries: TranscriptEntry[]): { chat: ChatMessage[]; events: FlowE
         }
       }
     });
-    if (texts.length) chat.push({ id: e.id, role: e.role, text: texts.join('\n\n') });
+    if (!texts.length) continue;
+    const text = texts.join('\n\n');
+    if (e.role === 'user' && text.startsWith(STEFFE_PREFIX)) {
+      const m = steffeMessage(text);
+      chat.push(m.user !== null ? { id: e.id, role: 'user', text: m.user } : { id: e.id, role: 'notice', text: m.title });
+      events.push({ kind: 'steffe', key: e.id, at: e.timestamp, title: m.title, text });
+    } else {
+      chat.push({ id: e.id, role: e.role, text });
+    }
   }
   return { chat, events };
+}
+
+/** Steffe's own messages to an agent (new request, reports, restarts) arrive as user turns with this prefix. */
+const STEFFE_PREFIX = '[steffe] ';
+
+/**
+ * How a Steffe message reads in the chat: the user's own words when it carries
+ * them (the request that started the task, an answer to a question), else
+ * `user` is null and the chat shows `title`, its first sentence.
+ */
+function steffeMessage(text: string): { user: string | null; title: string } {
+  const body = text.slice(STEFFE_PREFIX.length);
+  // The server wraps the request in instructions and appends the roles the orchestrator can spawn.
+  const request = /^New (?:message|task) from the user/.test(body)
+    ? body.match(/\n## Request\n([\s\S]*?)(?:\n\n## Roles you can spawn[\s\S]*)?$/)
+    : null;
+  if (request) return { user: request[1].trim(), title: 'New request from the user' };
+  const answer = body.match(/^The user answered your question\.[\s\S]*?\n\nAnswer: ([\s\S]*)$/);
+  if (answer) return { user: answer[1].trim(), title: 'The user answered your question' };
+  const first = (body.split('\n')[0] ?? '').replace(/\*\*/g, '');
+  return { user: null, title: first.split(/(?<=\.)\s/)[0] };
 }
 
 // --- chat --------------------------------------------------------------------
@@ -144,8 +176,14 @@ function Chat({ entries }: { entries: ChatMessage[] }) {
     <div className="transcript">
       {entries.map((e) => (
         <div key={e.id} className={`entry entry-${e.role}`}>
-          <div className="entry-role">{e.role}</div>
-          <div className="entry-body"><div className="block-text">{e.text}</div></div>
+          <div className="entry-role">{e.role === 'notice' ? 'steffe' : e.role}</div>
+          <div className="entry-body">
+            {e.role === 'assistant' ? (
+              <Markdown>{e.text}</Markdown>
+            ) : (
+              <div className={e.role === 'notice' ? 'muted' : 'block-text'}>{e.text}</div>
+            )}
+          </div>
         </div>
       ))}
     </div>
@@ -173,6 +211,8 @@ function EventBody({ ev }: { ev: FlowEvent }) {
       return <details className="block-thinking"><summary>thinking · {firstLine(ev.text)}</summary><pre>{ev.text}</pre></details>;
     case 'system':
       return <div className="event-system">{ev.text}</div>;
+    case 'steffe':
+      return <details className="block-result"><summary>steffe · {ev.title}</summary><pre>{ev.text}</pre></details>;
     case 'orphan_result':
       return <Result result={ev.result} />;
     case 'tool':

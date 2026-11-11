@@ -25,11 +25,12 @@ import { assistantEntry, historyEntry, localUserEntry, systemEntry, userEntry } 
 export type Emit = (event: ServerEvent) => void;
 
 /**
- * Extra configuration for sessions that run as an agent inside a Task.
- * Plain sessions (started from the UI) don't have one.
+ * Extra configuration for sessions that run as a Steffe agent: inside a Task,
+ * or a project's setup agent. Plain sessions (started from the UI) don't have one.
  */
 export interface AgentSessionConfig {
-  taskId: string;
+  /** null for the project setup agent, which belongs to no task. */
+  taskId: string | null;
   role: string;
   /** Appended to Claude Code's default system prompt. */
   systemPromptAppend: string;
@@ -205,7 +206,9 @@ export class ManagedSession {
       return {
         behavior: 'deny',
         message:
-          a.role === 'orchestrator'
+          a.role === 'setup'
+            ? 'Ask the user in plain text in your reply and end your turn.'
+            : a.role === 'orchestrator'
             ? 'Ask in plain text in your reply while you are chatting with the user (triage, planning), or with ask_user while work runs.'
             : 'You run unattended. Ask the orchestrator with ask_orchestrator, or report blockers with report.',
       };

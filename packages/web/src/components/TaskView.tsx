@@ -74,6 +74,8 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
   const items = task.plan?.items ?? [];
   const itemBranches = items.map((i) => i.branch).filter((b): b is string => !!b);
   const live = ['triage', 'planning', 'executing', 'escalated', 'finishing'].includes(task.phase);
+  // Design-only tasks leave nothing on the task branch worth checking out.
+  const canHandoff = task.phase === 'done' && !!task.worktreePath && !(items.length && items.every((i) => i.kind === 'design'));
   const agentPerms = (a: TaskAgent) => permissions.filter((p) => p.sessionId === a.sessionId).length;
 
   return (
@@ -82,7 +84,11 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
         <div>
           <h2>{task.title}</h2>
           <div className="meta mono task-path" title={task.worktreePath ?? undefined}>
-            {task.worktreePath ? `${task.branch} ← ${task.baseBranch}` : `${task.baseBranch} · no worktree yet`}
+            {task.worktreePath
+              ? `${task.branch} ← ${task.baseBranch}`
+              : task.phase === 'done'
+                ? `${task.branch} · handed off`
+                : `${task.baseBranch} · no worktree yet`}
           </div>
         </div>
         <div className="actions">
@@ -97,6 +103,13 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
           <span className="pill">${task.totalCostUsd.toFixed(2)}</span>
           {task.prUrl && (
             <a className="pill link-pill" href={task.prUrl} target="_blank" rel="noreferrer">PR ↗</a>
+          )}
+          {canHandoff && (
+            <button className="primary" disabled={busy}
+              title="Remove the task worktree and check the task branch out in the project's main checkout"
+              onClick={() => confirm(`Hand off? The task worktree is removed and ${task.branch} is checked out in the project.`) && act(() => api.handoffTask(task.id))}>
+              Handoff
+            </button>
           )}
           {task.phase === 'planning' && (
             <button className="primary" disabled={busy || !items.length} onClick={() => act(() => api.approveTask(task.id))}
@@ -231,7 +244,9 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
                 {task.prUrl ? (
                   <p><a href={task.prUrl} target="_blank" rel="noreferrer">{task.prUrl}</a></p>
                 ) : (
-                  <p className="muted">No pull request (no remote). Test locally in <span className="mono">{task.worktreePath}</span>.</p>
+                  <p className="muted">No pull request (no remote). {task.worktreePath
+                    ? <>Test locally in <span className="mono">{task.worktreePath}</span>.</>
+                    : <><span className="mono">{task.branch}</span> is checked out in the project.</>}</p>
                 )}
                 <Markdown>{task.report}</Markdown>
               </div>

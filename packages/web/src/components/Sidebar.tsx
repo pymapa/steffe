@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { CatalogEntry, PermissionRequest, Project, ProjectCatalog, SessionSummary, Task } from '@steffe/shared';
 import { STATUS_LABEL, taskStatus } from '../lib/taskStatus';
+import { setupSession } from './SetupView';
 
 export type Selection =
   | { kind: 'new-task' }
@@ -8,6 +9,7 @@ export type Selection =
   | { kind: 'pr'; number: number }
   | { kind: 'task'; id: string }
   | { kind: 'session'; id: string }
+  | { kind: 'setup' }
   | { kind: 'catalog'; entryKind: CatalogEntry['kind']; source: CatalogEntry['source']; name: string; edit?: boolean }
   | { kind: 'new-catalog'; entryKind: CatalogEntry['kind'] };
 
@@ -102,6 +104,32 @@ export function Sidebar(p: Props) {
     </>
   );
 
+  // How Steffe's roles use the project's agents and skills (see SetupView).
+  const setupEntry = () => {
+    const s = setupSession(p.project.id, p.sessions);
+    const running = s && (s.status === 'starting' || s.status === 'running');
+    const label = p.project.setupProposal
+      ? 'Proposal ready'
+      : running
+        ? 'Analyzing…'
+        : p.project.setup
+          ? `In use · ${p.project.setup.roles.length} roles`
+          : 'Not set up';
+    return (
+      <ul className="session-list setup-entry">
+        <li className={`session-item ${p.selection?.kind === 'setup' ? 'selected' : ''}`} onClick={() => p.onSelect({ kind: 'setup' })}
+          title="How Steffe's roles use this project's agents and skills">
+          <div className="row">
+            <span className={`status ${p.project.setupProposal ? 'task-status-handoff' : running ? 'task-status-working' : ''}`} />
+            <span className="title">Project setup</span>
+            {p.project.setupProposal && <span className="badge warn">!</span>}
+          </div>
+          <div className="meta"><span>{label}</span></div>
+        </li>
+      </ul>
+    );
+  };
+
   const is = (sel: Selection) =>
     p.selection?.kind === sel.kind && ('id' in sel ? 'id' in p.selection && p.selection.id === sel.id : true);
   // Each session is exactly one task; plain SDK sessions are not listed.
@@ -139,6 +167,7 @@ export function Sidebar(p: Props) {
           );
         })}
       </ul>
+      {setupEntry()}
       {catalogSection('agent', 'Agents', p.catalog?.agents)}
       {catalogSection('skill', 'Skills', p.catalog?.skills)}
     </aside>
