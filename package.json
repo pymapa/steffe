@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=@steffe/server & npm run dev --workspace=@steffe/web & wait",
+    "dev": "concurrently -k --raw \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm run dev --workspace=@steffe/server",
     "dev:web": "npm run dev --workspace=@steffe/web",
     "build": "npm run build --workspaces --if-present",
@@ -15,5 +15,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.5"
   }
 }
