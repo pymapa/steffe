@@ -1,0 +1,19 @@
+{
+  "name": "steffe",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local web UI for orchestrating Claude Code sessions",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@steffe/server & npm run dev --workspace=@steffe/web & wait",
+    "dev:server": "npm run dev --workspace=@steffe/server",
+    "dev:web": "npm run dev --workspace=@steffe/web",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
