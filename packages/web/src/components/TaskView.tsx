@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { STATUS_LABEL, taskStatus } from '../lib/taskStatus';
 import { ImageLightbox } from './ImageLightbox';
 import { Markdown } from './Markdown';
-import { SessionView } from './SessionView';
+import { Composer, SessionView } from './SessionView';
 import { Transcript } from './Transcript';
 import { useResizable } from '../lib/useResizable';
 
@@ -74,6 +74,14 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
   const items = task.plan?.items ?? [];
   const itemBranches = items.map((i) => i.branch).filter((b): b is string => !!b);
   const live = ['triage', 'planning', 'executing', 'escalated', 'finishing'].includes(task.phase);
+  // The orchestrator stays reachable after the task ends: messaging it resumes it.
+  const orchSend = (text: string) => api.messageTask(task.id, text);
+  const orchDisabled = task.phase === 'paused' ? 'The task is paused: resume it to continue' : null;
+  const canHandoff = !live && task.phase !== 'paused' && !!task.worktreePath;
+  const handoff = () =>
+    confirm(
+      `Hand off "${task.title}"?\n\nThe task's worktrees are removed (agents' running apps are stopped) and ${task.branch} is checked out in your main checkout. Both must have no uncommitted changes.`,
+    ) && act(() => api.handoffTask(task.id));
   const agentPerms = (a: TaskAgent) => permissions.filter((p) => p.sessionId === a.sessionId).length;
 
   return (
@@ -82,7 +90,11 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
         <div>
           <h2>{task.title}</h2>
           <div className="meta mono task-path" title={task.worktreePath ?? undefined}>
-            {task.worktreePath ? `${task.branch} ← ${task.baseBranch}` : `${task.baseBranch} · no worktree yet`}
+            {task.handedOff
+              ? `${task.handedOff} · checked out in your main checkout`
+              : task.worktreePath
+                ? `${task.branch} ← ${task.baseBranch}`
+                : `${task.baseBranch} · no worktree yet`}
           </div>
         </div>
         <div className="actions">
@@ -111,6 +123,12 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
           {(live || task.phase === 'paused') && (
             <button className="danger" disabled={busy} onClick={() => confirm('Cancel this task? Agents are stopped; worktrees and branches stay.') && act(() => api.cancelTask(task.id))}>
               Cancel
+            </button>
+          )}
+          {canHandoff && (
+            <button className="primary" disabled={busy} onClick={handoff}
+              title="Remove the task worktree and check the branch out in your main checkout for local testing">
+              Handoff
             </button>
           )}
           {!live && (
@@ -230,8 +248,10 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
               <div className="pad">
                 {task.prUrl ? (
                   <p><a href={task.prUrl} target="_blank" rel="noreferrer">{task.prUrl}</a></p>
+                ) : task.handedOff ? (
+                  <p className="muted">No pull request (no remote). <span className="mono">{task.handedOff}</span> is checked out in your main checkout.</p>
                 ) : (
-                  <p className="muted">No pull request (no remote). Test locally in <span className="mono">{task.worktreePath}</span>.</p>
+                  <p className="muted">No pull request (no remote). Test locally in <span className="mono">{task.worktreePath}</span>, or hand it off to check it out in your main checkout.</p>
                 )}
                 <Markdown>{task.report}</Markdown>
               </div>
@@ -259,9 +279,13 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
               transcript={transcripts[session.id] ?? []}
               permissions={permissions.filter((p) => p.sessionId === session.id)}
               compact
+              {...(agent.role === 'orchestrator' ? { onSend: orchSend, canSend: !orchDisabled } : {})}
             />
           ) : (
-            agent ? <StoredAgent task={task} agent={agent} /> : <div className="muted pad">No agents yet.</div>
+            agent ? (
+              <StoredAgent task={task} agent={agent}
+                composer={agent.role === 'orchestrator' && <Composer onSend={orchSend} disabledReason={orchDisabled} />} />
+            ) : <div className="muted pad">No agents yet.</div>
           )}
         </section>
       </div>
@@ -310,7 +334,7 @@ function PlanSummary({ task }: { task: Task }) {
 }
 
 /** Read-only transcript of an agent that is not running (closed, or the server restarted). */
-function StoredAgent({ task, agent }: { task: Task; agent: TaskAgent }) {
+function StoredAgent({ task, agent, composer }: { task: Task; agent: TaskAgent; composer?: React.ReactNode }) {
   const [entries, setEntries] = useState<TranscriptEntry[] | null>(null);
   useEffect(() => {
     setEntries(null);
@@ -321,7 +345,11 @@ function StoredAgent({ task, agent }: { task: Task; agent: TaskAgent }) {
       <header className="session-header">
         <div className="muted">
           <strong>{agent.name}</strong> is not running ({agent.state})
-          {task.phase === 'paused' && '. Resume the task to bring it back.'}
+          {task.phase === 'paused'
+            ? '. Resume the task to bring it back.'
+            : composer
+              ? '. Send a message to bring it back.'
+              : ''}
         </div>
       </header>
       {entries === null ? (
@@ -333,6 +361,7 @@ function StoredAgent({ task, agent }: { task: Task; agent: TaskAgent }) {
           chatFooter={agent.lastReport && <pre className="report-pre">{agent.lastReport}</pre>}
         />
       )}
+      {composer}
     </div>
   );
 }

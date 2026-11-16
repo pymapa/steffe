@@ -94,6 +94,8 @@ export class TaskManager {
   private readonly carriedCost = new Map<string, number>();
   private readonly nudges = new Map<string, number>();
   private readonly saveTimers = new Map<string, NodeJS.Timeout>();
+  /** Tasks whose orchestrator just called finish: it is stopped when that turn ends. Later chats keep it running. */
+  private readonly finishing = new Set<string>();
 
   constructor(
     private readonly sessions: SessionManager,
@@ -113,6 +115,7 @@ export class TaskManager {
       try {
         const task = JSON.parse(await readFile(join(TASKS_DIR, f), 'utf8')) as Task;
         task.inbox ??= [];
+        task.handedOff ??= null;
         for (const a of task.agents) a.pendingQuestion ??= null;
         for (const item of task.plan?.items ?? []) item.kind ??= 'code';
         // Nothing survives a restart: everything that was live is now paused.
@@ -218,6 +221,7 @@ export class TaskManager {
       baseBranch,
       branch,
       worktreePath: null,
+      handedOff: null,
       agents: [],
       question: null,
       report: null,
@@ -338,6 +342,77 @@ export class TaskManager {
     return task;
   }
 
+  /**
+   * The user writes to the orchestrator. Works in any phase but paused: a stopped orchestrator
+   * (finished or cancelled task, or after a restart) is resumed with the message.
+   */
+  async message(id: string, text: string): Promise<Task> {
+    const task = this.must(id);
+    if (task.phase === 'paused') throw new Error('the task is paused: resume it first');
+    const orch = task.agents.find((a) => a.role === 'orchestrator');
+    if (!orch) throw new Error('this task has no orchestrator');
+    const live = this.live.get(task.id)?.get(orch.name);
+    if (live && live.status !== 'ended' && live.status !== 'error') {
+      live.send(text);
+    } else {
+      const ended = !LIVE_PHASES.includes(task.phase);
+      const notes = ended
+        ? [
+            `[steffe] The task is ${task.phase}${task.handedOff ? ` and handed off: the user's main checkout is on ${task.handedOff} and the task worktree is gone` : ''}. No other agents are running. The user is writing to you again: answer in chat.`,
+            ...task.inbox.splice(0),
+          ]
+        : [];
+      const body = [...notes, notes.length ? `The user's message:\n\n${text}` : text].join('\n\n---\n\n');
+      await this.restartAgent(task, orch, body);
+      if (!orch.claudeSessionId) this.live.get(task.id)?.get(orch.name)?.send(body);
+    }
+    this.changed(task);
+    return task;
+  }
+
+  /**
+   * Hand a finished task to the user for local testing: remove its worktrees and check the
+   * branch out in the main checkout. Refuses when either checkout has uncommitted changes.
+   */
+  async handoff(id: string): Promise<Task> {
+    const task = this.must(id);
+    if (LIVE_PHASES.includes(task.phase) || task.phase === 'paused') {
+      throw new Error(`task is ${task.phase}: hand off a finished task (or cancel it first)`);
+    }
+    if (!task.worktreePath) throw new Error(task.handedOff ? `already handed off (${task.handedOff})` : 'the task has no branch yet');
+    const project = this.project(task);
+    const items = task.plan?.items ?? [];
+    // A design-only task leaves its mock on the design branch, not the task branch.
+    const designOnly = items.length > 0 && items.every((i) => i.kind === 'design');
+    const branch = (designOnly && items.find((i) => i.branch)?.branch) || task.branch;
+
+    const mainDirty = await tryGit(project.path, 'status', '--porcelain', '--untracked-files=no');
+    if (!mainDirty.ok) throw new Error(`git status failed in ${project.path}: ${mainDirty.out}`);
+    if (mainDirty.out) throw new Error(`your main checkout has uncommitted changes; commit or stash them first:\n${mainDirty.out}`);
+    const worktrees = [task.worktreePath, ...items.map((i) => i.worktreePath).filter((p): p is string => !!p)];
+    for (const wt of worktrees) {
+      const dirty = await tryGit(wt, 'status', '--porcelain');
+      if (dirty.ok && dirty.out) throw new Error(`${wt} has uncommitted changes that would be lost:\n${dirty.out}`);
+    }
+
+    // Agents' apps (dev servers) run from the worktrees; stop them first.
+    for (const a of task.agents) if (a.role !== 'orchestrator' && a.state !== 'closed') await this.stopAgent(task, a.name);
+    for (const item of items) {
+      if (item.worktreePath) {
+        await removeWorktree(project.path, item.worktreePath);
+        item.worktreePath = null;
+      }
+    }
+    await removeWorktree(project.path, task.worktreePath);
+    task.worktreePath = null;
+    this.changed(task);
+    const co = await tryGit(project.path, 'checkout', branch);
+    if (!co.ok) throw new Error(`the worktrees are removed, but checking out ${branch} failed:\n${co.out}`);
+    task.handedOff = branch;
+    this.changed(task);
+    return task;
+  }
+
   /** Stop every agent but keep their sessions resumable. */
   async pause(id: string): Promise<Task> {
     const task = this.must(id);
@@ -418,8 +493,8 @@ export class TaskManager {
         if (item.worktreePath) await removeWorktree(project.path, item.worktreePath);
       }
       if (task.worktreePath) await removeWorktree(project.path, task.worktreePath);
-      // Without a worktree the task branch was never created.
-      if (opts.deleteBranches && task.worktreePath) warnings.push(...(await this.deleteBranches(project.path, task)));
+      // Without a worktree (or a handoff) the task branch was never created.
+      if (opts.deleteBranches && (task.worktreePath || task.handedOff)) warnings.push(...(await this.deleteBranches(project.path, task)));
     }
     await rm(join(WORKTREES_DIR, task.id), { recursive: true, force: true });
     await rm(join(TASKS_DIR, `${task.id}.json`), { force: true });
@@ -614,7 +689,8 @@ export class TaskManager {
     if (!task || !agent || this.live.get(taskId)?.get(name) !== s) return;
 
     if (agent.role === 'orchestrator') {
-      if (task.phase === 'done') {
+      if (task.phase === 'done' && this.finishing.delete(taskId)) {
+        // Free the process; the user can still message it, which resumes it.
         void this.stopAgent(task, name).then(() => this.changed(task));
         return;
       }
@@ -1070,6 +1146,7 @@ export class TaskManager {
       }
     }
     task.phase = 'done';
+    this.finishing.add(task.id);
   }
 
   /** The user only wanted a design: there is no code to merge and no PR; the approved mock stays on its branch. */

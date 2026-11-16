@@ -247,6 +247,8 @@ export interface Task {
    * (start_planning / start_work): a request it just answers never gets one.
    */
   worktreePath: string | null;
+  /** Branch the user's main checkout was switched to by handoff (the task worktree is gone then). */
+  handedOff: string | null;
   agents: TaskAgent[];
   question: TaskQuestion | null;
   report: string | null;
@@ -272,6 +274,11 @@ export interface CreateTaskRequest {
   title?: string;
   /** Default model for agents whose role does not pin one. */
   model?: string;
+}
+
+/** Request body for POST /api/tasks/:id/message: the user writes to the orchestrator (restarted if it was stopped). */
+export interface TaskMessageRequest {
+  text: string;
 }
 
 /** Request body for POST /api/tasks/:id/answer */

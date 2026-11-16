@@ -5,6 +5,7 @@ import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import type {
   AnswerTaskRequest,
+  TaskMessageRequest,
   DeleteTaskResult,
   CreateCatalogEntryRequest,
   SaveCatalogEntryRequest,
@@ -204,6 +205,15 @@ app.post('/api/tasks/:id/approve', taskAction((id) => tasks.approve(id)));
 app.post('/api/tasks/:id/pause', taskAction((id) => tasks.pause(id)));
 app.post('/api/tasks/:id/resume', taskAction((id) => tasks.resume(id)));
 app.post('/api/tasks/:id/cancel', taskAction((id) => tasks.cancel(id)));
+app.post('/api/tasks/:id/handoff', taskAction((id) => tasks.handoff(id)));
+app.post(
+  '/api/tasks/:id/message',
+  taskAction((id, body) => {
+    const text = (body as TaskMessageRequest).text?.trim();
+    if (!text) throw new Error('text is required');
+    return tasks.message(id, text);
+  }),
+);
 app.post(
   '/api/tasks/:id/answer',
   taskAction((id, body) => {
