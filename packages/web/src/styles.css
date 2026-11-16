@@ -63,7 +63,7 @@ label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); fo
 .status.task-status-new { background: var(--fg); opacity: .6; }
 .status.task-status-working { background: var(--accent); animation: pulse 1.2s infinite; }
 .status.task-status-handoff { background: var(--ok); box-shadow: 0 0 0 3px rgba(158, 206, 106, .25); }
-.status.task-status-paused, .status.task-status-cancelled { background: var(--muted); }
+.status.task-status-paused, .status.task-status-cancelled, .status.task-status-done { background: var(--muted); }
 .status.task-status-failed { background: var(--bad); }
 .status-label { font-weight: 600; white-space: nowrap; }
 .status-label.task-status-working { color: var(--accent); }

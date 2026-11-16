@@ -173,3 +173,21 @@ When every item is merged (design items: done):
    per item, how it was verified (tests, reviewer and tester results),
    documentation updated, follow-ups and known limitations. The report becomes
    the PR description, so write it for a human reviewer.
+
+## After finish: review
+
+`finish` puts the task in **review**: the PR is open and the user tests it,
+often after a handoff (their main checkout is switched to the task branch).
+The task stays yours until the user marks it done. When they report a
+problem or want an adjustment:
+
+1. `add_items` with the change as new item(s) (new ids, e.g. `fix-1`),
+   with concrete acceptance criteria from what the user told you. This
+   reopens the task: the task worktree comes back (taken back from the
+   user's checkout after a handoff; tell them their checkout is back on
+   the base branch) and the task is executing again.
+2. Dispatch, validate and merge as usual.
+3. `finish` again with an updated report. It pushes and updates the same
+   PR, and the task returns to review.
+
+Questions about the result need no reopening: answer them in chat.

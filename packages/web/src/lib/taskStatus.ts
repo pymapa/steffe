@@ -9,13 +9,14 @@ import type { PermissionRequest, SessionSummary, Task } from '@steffe/shared';
  *   a question, a permission, or a finished result to pick up)
  * - paused: stopped; resume to continue
  */
-export type TaskStatus = 'new' | 'working' | 'handoff' | 'paused' | 'cancelled' | 'failed';
+export type TaskStatus = 'new' | 'working' | 'handoff' | 'paused' | 'done' | 'cancelled' | 'failed';
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   new: 'New',
   working: 'Working',
   handoff: 'Ready for handoff',
   paused: 'Paused',
+  done: 'Done',
   cancelled: 'Cancelled',
   failed: 'Failed',
 };
@@ -27,12 +28,19 @@ export interface TaskStatusInfo {
 }
 
 const live = (s: SessionSummary | undefined) => s?.status === 'starting' || s?.status === 'running';
+const sessionOf = (task: Task, sessions: SessionSummary[]) => {
+  const orch = task.agents.find((a) => a.role === 'orchestrator');
+  return orch ? sessions.find((s) => s.id === orch.sessionId) : undefined;
+};
 
 export function taskStatus(task: Task, sessions: SessionSummary[], permissions: PermissionRequest[]): TaskStatusInfo {
   if (task.phase === 'paused') return { status: 'paused', detail: task.lastError ? 'stopped by an error' : 'resume to continue' };
   if (task.phase === 'cancelled') return { status: 'cancelled', detail: '' };
   if (task.phase === 'failed') return { status: 'failed', detail: task.lastError ?? '' };
-  if (task.phase === 'done') return { status: 'handoff', detail: task.prUrl ? 'pull request ready' : 'finished, report ready' };
+  if (task.phase === 'done') return { status: 'done', detail: '' };
+  if (task.phase === 'review' && !live(sessionOf(task, sessions))) {
+    return { status: 'handoff', detail: task.handedOff ? 'checked out, ready to test' : task.prUrl ? 'pull request ready to test' : 'ready to test' };
+  }
   if (task.question) return { status: 'handoff', detail: task.question.images?.length ? 'design to review' : 'question for you' };
   if (permissions.some((p) => task.agents.some((a) => a.sessionId === p.sessionId))) {
     return { status: 'handoff', detail: 'permission needed' };

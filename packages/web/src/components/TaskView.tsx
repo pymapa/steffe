@@ -120,7 +120,13 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
           {task.phase === 'paused' && (
             <button className="primary" disabled={busy} onClick={() => act(() => api.resumeTask(task.id))}>Resume</button>
           )}
-          {(live || task.phase === 'paused') && (
+          {task.phase === 'review' && (
+            <button disabled={busy} onClick={() => act(() => api.completeTask(task.id))}
+              title="Tested, merged or otherwise closed: mark the task done. You can still chat with the orchestrator.">
+              Mark done
+            </button>
+          )}
+          {(live || task.phase === 'paused' || task.phase === 'review') && (
             <button className="danger" disabled={busy} onClick={() => confirm('Cancel this task? Agents are stopped; worktrees and branches stay.') && act(() => api.cancelTask(task.id))}>
               Cancel
             </button>

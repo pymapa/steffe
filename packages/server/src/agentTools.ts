@@ -93,7 +93,7 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
     ),
     tool(
       'add_items',
-      'Add work items to the plan while executing, e.g. code items after the user approved a design-only start and wants it built. Same shape as plan items.',
+      'Add work items to the plan while executing, e.g. code items after the user approved a design-only start and wants it built. On a finished task (review or done) it reopens the task for changes the user asks for: the task worktree comes back and the task executes again; finish afterwards updates the same PR. Same shape as plan items.',
       { items: z.array(planItem) },
       wrap(({ items }) => host.addItems(items)),
     ),

@@ -141,7 +141,8 @@ export type TaskPhase =
   | 'escalated' // orchestrator asked the user a question and is waiting
   | 'paused' // agents stopped (server restart or user pause); resumable
   | 'finishing' // pushing branch / opening PR
-  | 'done' // PR opened (or report written when there is no remote)
+  | 'review' // PR opened (or report written): the user tests it; changes reopen it (add_items)
+  | 'done' // the user marked it done (tested, merged or otherwise closed)
   | 'failed'
   | 'cancelled';
 

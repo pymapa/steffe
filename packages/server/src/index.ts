@@ -205,6 +205,7 @@ app.post('/api/tasks/:id/approve', taskAction((id) => tasks.approve(id)));
 app.post('/api/tasks/:id/pause', taskAction((id) => tasks.pause(id)));
 app.post('/api/tasks/:id/resume', taskAction((id) => tasks.resume(id)));
 app.post('/api/tasks/:id/cancel', taskAction((id) => tasks.cancel(id)));
+app.post('/api/tasks/:id/complete', taskAction((id) => tasks.complete(id)));
 app.post('/api/tasks/:id/handoff', taskAction((id) => tasks.handoff(id)));
 app.post(
   '/api/tasks/:id/message',

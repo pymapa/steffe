@@ -67,6 +67,7 @@ export const api = {
   cancelTask: (id: string) => request<Task>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
   messageTask: (id: string, text: string) =>
     request<Task>(`/api/tasks/${id}/message`, { method: 'POST', body: JSON.stringify({ text }) }),
+  completeTask: (id: string) => request<Task>(`/api/tasks/${id}/complete`, { method: 'POST' }),
   handoffTask: (id: string) => request<Task>(`/api/tasks/${id}/handoff`, { method: 'POST' }),
   answerTask: (id: string, answer: string) =>
     request<Task>(`/api/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),

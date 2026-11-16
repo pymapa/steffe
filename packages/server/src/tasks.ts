@@ -248,11 +248,31 @@ export class TaskManager {
     return task;
   }
 
-  /** Create the task branch (<type>/<slug>, made unique) and its worktree the first time work starts. */
+  /**
+   * Create the task worktree: on first start also name the branch (<type>/<slug>, made unique).
+   * A reopened task gets its existing branch back, taking it from the main checkout after a handoff.
+   */
   private async ensureWorktree(task: Task, type: BranchType): Promise<string> {
     if (task.worktreePath) return task.worktreePath;
     const project = this.project(task);
     const path = join(WORKTREES_DIR, task.id, 'task');
+    if (task.phase !== 'triage') {
+      if (task.handedOff) {
+        const current = await tryGit(project.path, 'symbolic-ref', '--short', 'HEAD');
+        if (current.ok && current.out === task.branch) {
+          const dirty = await tryGit(project.path, 'status', '--porcelain', '--untracked-files=no');
+          if (dirty.out) {
+            throw new Error(`${task.branch} is checked out in the user's main checkout with uncommitted changes. Ask the user to commit or stash them, then retry:\n${dirty.out}`);
+          }
+          const back = await tryGit(project.path, 'checkout', task.baseBranch);
+          if (!back.ok) throw new Error(`could not switch the main checkout back to ${task.baseBranch}: ${back.out}`);
+        }
+        task.handedOff = null;
+      }
+      await addWorktree(project.path, path, task.branch, task.branch);
+      task.worktreePath = path;
+      return path;
+    }
     // "Fix login" -> fix/login, not fix/fix-login.
     const slug = slugify(task.title);
     const name = `${type}/${slug.startsWith(`${type}-`) ? slug.slice(type.length + 1) : slug}`;
@@ -367,7 +387,11 @@ export class TaskManager {
       const ended = !LIVE_PHASES.includes(task.phase);
       const notes = ended
         ? [
-            `[steffe] The task is ${task.phase}${task.handedOff ? ` and handed off: the user's main checkout is on ${task.handedOff} and the task worktree is gone` : ''}. No other agents are running. The user is writing to you again: answer in chat.`,
+            `[steffe] The task is ${task.phase}${task.handedOff ? ` and handed off: the user's main checkout is on ${task.handedOff} and the task worktree is gone` : ''}. No other agents are running. The user is writing to you again: answer in chat.${
+              task.phase === 'review' || task.phase === 'done'
+                ? ' If they want changes, add_items with the fix(es): that reopens the task (and takes the branch back from their checkout after a handoff); then dispatch, validate, merge and finish as usual, which updates the same PR.'
+                : ''
+            }`,
             ...task.inbox.splice(0),
           ]
         : [];
@@ -418,6 +442,15 @@ export class TaskManager {
     const co = await tryGit(project.path, 'checkout', branch);
     if (!co.ok) throw new Error(`the worktrees are removed, but checking out ${branch} failed:\n${co.out}`);
     task.handedOff = branch;
+    this.changed(task);
+    return task;
+  }
+
+  /** The user tested it (or it was merged / closed): the task is done. The orchestrator stays reachable. */
+  async complete(id: string): Promise<Task> {
+    const task = this.must(id);
+    if (task.phase !== 'review') throw new Error(`task is ${task.phase}, not in review`);
+    task.phase = 'done';
     this.changed(task);
     return task;
   }
@@ -698,7 +731,7 @@ export class TaskManager {
     if (!task || !agent || this.live.get(taskId)?.get(name) !== s) return;
 
     if (agent.role === 'orchestrator') {
-      if (task.phase === 'done' && this.finishing.delete(taskId)) {
+      if (task.phase === 'review' && this.finishing.delete(taskId)) {
         // Free the process; the user can still message it, which resumes it.
         void this.stopAgent(task, name).then(() => this.changed(task));
         return;
@@ -925,8 +958,11 @@ export class TaskManager {
   }
 
   /** Extend the plan while executing, e.g. code items after a design-only start was approved. */
-  private addItems(task: Task, items: PlanItemInput[]): string {
-    if (task.phase !== 'executing' && task.phase !== 'escalated') throw new Error(`task is ${task.phase}; add_items is for executing tasks`);
+  private async addItems(task: Task, items: PlanItemInput[]): Promise<string> {
+    const reopen = task.phase === 'review' || task.phase === 'done';
+    if (!reopen && task.phase !== 'executing' && task.phase !== 'escalated') {
+      throw new Error(`task is ${task.phase}; add_items is for executing or finished tasks`);
+    }
     if (!task.plan) throw new Error('the task has no plan');
     if (!items.length) throw new Error('no items given');
     const ids = new Set(task.plan.items.map((i) => i.id));
@@ -938,8 +974,16 @@ export class TaskManager {
       const missing = i.dependsOn.filter((d) => !ids.has(d));
       if (missing.length) throw new Error(`item ${i.id} depends on unknown items: ${missing.join(', ')}`);
     }
+    let note = '';
+    if (reopen) {
+      const tookBack = task.handedOff;
+      const wt = await this.ensureWorktree(task, 'feature');
+      task.phase = 'executing';
+      task.question = null;
+      note = ` The task is reopened and executing again in ${wt} on ${task.branch}${tookBack ? ` (the user's main checkout was switched back to ${task.baseBranch}; tell them)` : ''}. Validate and merge as usual, then finish again: it pushes and updates the existing PR.`;
+    }
     task.plan.items.push(...items.map(newItem));
-    return `Added ${items.map((i) => i.id).join(', ')} to the plan. Dispatch them as usual.`;
+    return `Added ${items.map((i) => i.id).join(', ')} to the plan.${note} Dispatch them as usual.`;
   }
 
   private item(task: Task, id: string): WorkItem {
@@ -1142,7 +1186,7 @@ export class TaskManager {
     }
 
     await this.windDown(task, project);
-    return `${result}\nThe task is done. Reply with a one-line summary and stop.`;
+    return `${result}\nThe task is now in review: the user tests it and may ask you for changes (add_items reopens the task). Reply with a one-line summary and stop.`;
   }
 
   /** Subagents and item worktrees go; the task worktree stays for local testing. Branches are kept. */
@@ -1154,7 +1198,7 @@ export class TaskManager {
         item.worktreePath = null;
       }
     }
-    task.phase = 'done';
+    task.phase = 'review';
     this.finishing.add(task.id);
   }
 
@@ -1165,6 +1209,6 @@ export class TaskManager {
     await mkdir(TASKS_DIR, { recursive: true });
     await writeFile(join(TASKS_DIR, `${task.id}.report.md`), `# ${title}\n\n${task.report}\n`);
     await this.windDown(task, this.project(task));
-    return `Design-only task finished without a pull request. The approved mock stays on ${branches.join(', ') || '(no branch)'}. Reply with a one-line summary and stop.`;
+    return `Design-only task finished without a pull request. The approved mock stays on ${branches.join(', ') || '(no branch)'}. The task is now in review; add_items reopens it if the user wants changes. Reply with a one-line summary and stop.`;
   }
 }
