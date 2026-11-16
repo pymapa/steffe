@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Reviews a work item's code and tests against its acceptance criteria. Read-only.
-model: inherit
+model: opus
 tools: report, ask_orchestrator
 disallowedTools: Edit, Write, MultiEdit, NotebookEdit
 writable: none

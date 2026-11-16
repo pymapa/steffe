@@ -1,7 +1,7 @@
 ---
 name: tester
 description: Verifies acceptance criteria end to end by running the app and driving it with Playwright.
-model: inherit
+model: sonnet
 tools: report, ask_orchestrator
 disallowedTools: Edit, MultiEdit, NotebookEdit
 mcp: playwright

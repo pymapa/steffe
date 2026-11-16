@@ -37,7 +37,7 @@ app.get('/api/health', (c) => c.json({ ok: true }));
 app.get('/api/defaults', (c) =>
   c.json({
     browseRoot: process.env.STEFFE_BROWSE_ROOT ?? homedir(),
-    models: ['sonnet', 'opus', 'haiku'],
+    models: ['fable', 'opus', 'sonnet', 'haiku'],
   }),
 );
 

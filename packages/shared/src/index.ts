@@ -238,7 +238,6 @@ export interface Task {
   phase: TaskPhase;
   /** Phase to return to when resuming a paused task. */
   resumePhase: TaskPhase | null;
-  model: string | null;
   plan: TaskPlan | null;
   baseBranch: string;
   branch: string;
@@ -272,8 +271,6 @@ export interface CreateTaskRequest {
   projectId: string;
   prompt: string;
   title?: string;
-  /** Default model for agents whose role does not pin one. */
-  model?: string;
 }
 
 /** Request body for POST /api/tasks/:id/message: the user writes to the orchestrator (restarted if it was stopped). */

@@ -12,8 +12,8 @@ export const PLUGIN_DIR = join(STEFFE_HOME, 'plugin');
 export interface RoleDefinition {
   name: string;
   description: string;
-  /** null = inherit the task's default model */
-  model: string | null;
+  /** Model alias (fable, opus, sonnet, haiku) or full id. Every role pins one: agents never inherit. */
+  model: string;
   tools: string[];
   disallowedTools: string[];
   mcp: string[];
@@ -32,10 +32,11 @@ const list = (v: string | undefined) =>
 function parse(file: string, raw: string): RoleDefinition {
   const { frontmatter: fm, body } = parseFrontmatter(raw);
   if (!fm.name) throw new Error(`${file}: frontmatter needs a name`);
+  if (!fm.model || fm.model === 'inherit') throw new Error(`${file}: frontmatter needs a model (fable, opus, sonnet or haiku); roles don't inherit one`);
   return {
     name: fm.name,
     description: fm.description ?? '',
-    model: !fm.model || fm.model === 'inherit' ? null : fm.model,
+    model: fm.model,
     tools: list(fm.tools),
     disallowedTools: list(fm.disallowedTools),
     mcp: list(fm.mcp),

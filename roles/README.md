@@ -11,7 +11,7 @@ Frontmatter:
 | ----------------- | --------------------------------------------------------------------- |
 | `name`            | role id, used by `spawn_agent(role=...)`                              |
 | `description`     | one line, shown to the orchestrator in its role list                  |
-| `model`           | `inherit` (task default) or a model alias (`sonnet`, `opus`, `haiku`) |
+| `model`           | Required. A model alias (`fable`, `opus`, `sonnet`, `haiku`) or full id; roles never inherit |
 | `tools`           | Steffe tools the role may call (comma separated)                   |
 | `disallowedTools` | Claude Code tools removed for this role (comma separated)             |
 | `mcp`             | extra MCP servers Steffe starts for the role (`playwright`)        |

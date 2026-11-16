@@ -99,7 +99,7 @@ TODO: the instructions Claude follows when this skill is used.
     return `---
 name: ${req.name}
 description: ${desc}
-model: inherit
+model: sonnet
 tools: report
 disallowedTools:
 writable: none

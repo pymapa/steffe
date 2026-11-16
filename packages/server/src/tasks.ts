@@ -216,7 +216,6 @@ export class TaskManager {
       prompt: req.prompt,
       phase: 'triage',
       resumePhase: null,
-      model: req.model ?? null,
       plan: null,
       baseBranch,
       branch,
@@ -630,7 +629,7 @@ export class TaskManager {
         projectId: task.projectId,
         prompt: opts.prompt,
         // STEFFE_FORCE_MODEL (e.g. haiku) overrides every role, for cheap smoke tests.
-        model: process.env.STEFFE_FORCE_MODEL || role.model || task.model || undefined,
+        model: process.env.STEFFE_FORCE_MODEL || role.model,
         permissionMode: 'default',
         resumeSessionId: opts.resume ?? undefined,
         title: `${agent.name} · ${task.title}`,
