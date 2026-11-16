@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, relative, sep } from 'node:path';
 import { DATA_DIR } from './dataDir.js';
+import { writeFileAtomic } from './atomicWrite.js';
 import type {
   CreateTaskRequest,
   Project,
@@ -123,14 +124,17 @@ export class TaskManager {
         this.tasks.set(task.id, task);
         await this.persist(task);
       } catch (err) {
-        console.error(`[steffe] could not load task ${f}:`, err);
+        // Set it aside so it isn't retried (and reported) on every start.
+        const aside = join(TASKS_DIR, `${f}.corrupt`);
+        await rename(join(TASKS_DIR, f), aside).catch(() => {});
+        console.error(`[steffe] could not load task ${f}, moved to ${aside}:`, err);
       }
     }
   }
 
   private async persist(task: Task): Promise<void> {
     await mkdir(TASKS_DIR, { recursive: true });
-    await writeFile(join(TASKS_DIR, `${task.id}.json`), JSON.stringify(task, null, 2));
+    await writeFileAtomic(join(TASKS_DIR, `${task.id}.json`), JSON.stringify(task, null, 2));
   }
 
   /** Sync live session state into the task, emit, and schedule a save. */

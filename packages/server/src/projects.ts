@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import type { CreateProjectRequest, Project } from '@steffe/shared';
 
 import { DATA_DIR } from './dataDir.js';
+import { writeFileAtomic } from './atomicWrite.js';
 
 const FILE = join(DATA_DIR, 'projects.json');
 
@@ -22,7 +23,7 @@ export class ProjectStore {
 
   private async save(): Promise<void> {
     await mkdir(DATA_DIR, { recursive: true });
-    await writeFile(FILE, JSON.stringify(this.list(), null, 2));
+    await writeFileAtomic(FILE, JSON.stringify(this.list(), null, 2));
   }
 
   list(): Project[] {
