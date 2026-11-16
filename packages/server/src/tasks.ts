@@ -42,7 +42,19 @@ const MAX_FIX_ROUNDS = 3;
 const MAX_NUDGES = 2;
 
 const LIVE_PHASES: TaskPhase[] = ['triage', 'planning', 'executing', 'escalated', 'finishing'];
+/** The PR is open; the orchestrator sleeps until the user (or a late validator report) wakes it. */
+const FINISHED_PHASES: TaskPhase[] = ['review', 'done'];
 const SINGLETON_ROLES = new Set(['planner', 'orchestrator']);
+/** Roles that only check work; finish(keep_validators) lets them run on after the PR is opened. */
+const VALIDATOR_ROLES = new Set(['reviewer', 'tester']);
+/**
+ * Agents (all tasks together) that may work at once; more spawns wait in a queue. Parallel agents
+ * each run typechecks, test suites and dev servers, and past a few of them everything slows to a
+ * crawl (pre-commit hooks taking 25 minutes). 0 means no limit.
+ */
+const MAX_AGENTS = Number(process.env.STEFFE_MAX_AGENTS ?? 4);
+/** After the last background command ends, how long an idle agent may take to pick up again. */
+const BACKGROUND_GRACE_MS = 30_000;
 
 /** Marker designers put on every mock change; finish refuses to open a PR while it is on the task branch. */
 export const MOCK_MARKER = 'STEFFE-MOCK';
@@ -91,8 +103,17 @@ export class TaskManager {
   private readonly tasks = new Map<string, Task>();
   /** agent name -> live session, per task */
   private readonly live = new Map<string, Map<string, ManagedSession>>();
-  /** cost already accounted for an agent before its current session (resumes start at 0) */
-  private readonly carriedCost = new Map<string, number>();
+  /**
+   * What an agent had accumulated before its current session. A resumed session's cost already
+   * includes the earlier turns (the CLI restores the total from its transcript), a fresh one starts at 0.
+   */
+  private readonly carried = new Map<string, { cost: number; resumed: boolean; activeMs: number }>();
+  private readonly backgroundTimers = new Map<string, NodeJS.Timeout>();
+  /** Tasks whose stopped orchestrator is being restarted to read its inbox. */
+  private readonly reviving = new Set<string>();
+  private drainPending = false;
+  private draining = false;
+  private drainAgain = false;
   private readonly nudges = new Map<string, number>();
   private readonly saveTimers = new Map<string, NodeJS.Timeout>();
   /** Tasks whose orchestrator just called finish: it is stopped when that turn ends. Later chats keep it running. */
@@ -117,7 +138,12 @@ export class TaskManager {
         const task = JSON.parse(await readFile(join(TASKS_DIR, f), 'utf8')) as Task;
         task.inbox ??= [];
         task.handedOff ??= null;
-        for (const a of task.agents) a.pendingQuestion ??= null;
+        for (const a of task.agents) {
+          a.pendingQuestion ??= null;
+          a.spawnedAt ??= task.createdAt;
+          a.closedAt ??= null;
+          a.activeMs ??= 0;
+        }
         for (const item of task.plan?.items ?? []) item.kind ??= 'code';
         // Nothing survives a restart: everything that was live is now paused.
         if (LIVE_PHASES.includes(task.phase)) {
@@ -146,14 +172,11 @@ export class TaskManager {
     const live = this.live.get(task.id);
     let cost = 0;
     for (const a of task.agents) {
-      const s = live?.get(a.name);
-      if (s) {
-        a.claudeSessionId = s.claudeSessionId ?? a.claudeSessionId;
-        a.costUsd = (this.carriedCost.get(`${task.id}:${a.name}`) ?? 0) + s.totalCostUsd;
-      }
+      this.syncFrom(task, a.name, live?.get(a.name));
       cost += a.costUsd;
     }
     task.totalCostUsd = cost;
+    this.scheduleDrain();
     task.updatedAt = now();
     this.emit({ type: 'task.updated', task });
     clearTimeout(this.saveTimers.get(task.id));
@@ -387,24 +410,34 @@ export class TaskManager {
     if (live && live.status !== 'ended' && live.status !== 'error') {
       live.send(text, images);
     } else {
-      const ended = !LIVE_PHASES.includes(task.phase);
-      const notes = ended
-        ? [
-            `[steffe] The task is ${task.phase}${task.handedOff ? ` and handed off: the user's main checkout is on ${task.handedOff} and the task worktree is gone` : ''}. No other agents are running. The user is writing to you again: answer in chat.${
-              task.phase === 'review' || task.phase === 'done'
-                ? ' If they want changes, add_items with the fix(es): that reopens the task (after a handoff the work happens right in their main checkout, so they see it immediately); then dispatch, validate, merge and finish as usual, which updates the same PR.'
-                : ''
-            }`,
-            ...task.inbox.splice(0),
-          ]
-        : [];
-      const body = [...notes, notes.length ? `The user's message:\n\n${text}` : text].join('\n\n---\n\n');
-      // Restart idle (or from its brief), then send: images can't ride on the initial prompt.
-      await this.restartAgent(task, orch, null);
-      this.live.get(task.id)?.get(orch.name)?.send(body, images);
+      await this.reviveOrchestrator(task, text, images);
     }
     this.changed(task);
     return task;
+  }
+
+  /**
+   * Bring a stopped orchestrator back with its inbox, and the user's message if there is one.
+   * Without one it was woken by agent messages (validators kept running after finish).
+   */
+  private async reviveOrchestrator(task: Task, userText: string | null, images: ImageAttachment[] = []): Promise<void> {
+    const orch = task.agents.find((a) => a.role === 'orchestrator');
+    if (!orch) return;
+    const ended = !LIVE_PHASES.includes(task.phase);
+    const working = task.agents.filter((a) => a.role !== 'orchestrator' && a.busy && a.state !== 'closed');
+    const reopen =
+      ' If they want changes, add_items with the fix(es): that reopens the task (after a handoff the work happens right in their main checkout, so they see it immediately); then dispatch, validate, merge and finish as usual, which updates the same PR.';
+    const header = !ended
+      ? null
+      : userText != null
+        ? `[steffe] The task is ${task.phase}${task.handedOff ? ` and handed off: the user's main checkout is on ${task.handedOff} and the task worktree is gone` : ''}. ${working.length ? `Still running: ${working.map((a) => a.name).join(', ')}.` : 'No other agents are running.'} The user is writing to you again: answer in chat.${FINISHED_PHASES.includes(task.phase) ? reopen : ''}`
+        : `[steffe] The task is ${task.phase}. Messages arrived while you were stopped (below), most likely reports from validators you kept running after finish. Tell the user the outcome in chat, briefly. If a validator found problems, say what you propose; add_items reopens the task when the user wants them fixed (or right away if they asked you to fix whatever validation finds).`;
+    const parts = [...(header ? [header] : []), ...task.inbox.splice(0)];
+    if (userText != null) parts.push(parts.length ? `The user's message:\n\n${userText}` : userText);
+    if (!parts.length) return;
+    // Restart idle (or from its brief), then send: images can't ride on the initial prompt.
+    await this.restartAgent(task, orch, null);
+    this.live.get(task.id)?.get(orch.name)?.send(parts.join('\n\n---\n\n'), images);
   }
 
   /**
@@ -433,6 +466,7 @@ export class TaskManager {
     }
 
     // Agents' apps (dev servers) run from the worktrees; stop them first.
+    const cut = task.agents.filter((a) => a.role !== 'orchestrator' && a.state !== 'closed' && a.busy);
     for (const a of task.agents) if (a.role !== 'orchestrator' && a.state !== 'closed') await this.stopAgent(task, a.name);
     for (const item of items) {
       if (item.worktreePath) {
@@ -446,6 +480,12 @@ export class TaskManager {
     const co = await tryGit(project.path, 'checkout', branch);
     if (!co.ok) throw new Error(`the worktrees are removed, but checking out ${branch} failed:\n${co.out}`);
     task.handedOff = branch;
+    if (cut.length) {
+      this.toOrchestrator(
+        task,
+        `[steffe] The user handed the task off while ${cut.map((a) => this.who(task, a)).join(', ')} ${cut.length > 1 ? 'were' : 'was'} still working; the handoff stopped ${cut.length > 1 ? 'them' : 'it'} before reporting, so that validation did not finish. Tell the user, and offer to validate again in their checkout (add_items with a validation item) if they want.`,
+      );
+    }
     this.changed(task);
     return task;
   }
@@ -465,7 +505,7 @@ export class TaskManager {
     if (!LIVE_PHASES.includes(task.phase)) throw new Error(`task is ${task.phase}`);
     task.resumePhase = task.phase;
     task.phase = 'paused';
-    for (const name of [...(this.live.get(task.id)?.keys() ?? [])]) this.detach(task, name);
+    await Promise.all([...(this.live.get(task.id)?.keys() ?? [])].map((name) => this.detach(task, name)));
     this.changed(task);
     return task;
   }
@@ -514,6 +554,7 @@ export class TaskManager {
   async cancel(id: string): Promise<Task> {
     const task = this.must(id);
     for (const name of [...(this.live.get(task.id)?.keys() ?? [])]) await this.stopAgent(task, name);
+    for (const a of task.agents) if (a.state === 'queued') await this.stopAgent(task, a.name);
     task.phase = 'cancelled';
     this.changed(task);
     return task;
@@ -578,10 +619,13 @@ export class TaskManager {
     return warnings;
   }
 
-  closeAll(): void {
+  /** Shutdown: stop every agent (interrupting running turns so their cost is recorded) but keep them resumable. */
+  async closeAll(): Promise<void> {
+    const all: Promise<void>[] = [];
     for (const task of this.tasks.values()) {
-      for (const name of [...(this.live.get(task.id)?.keys() ?? [])]) this.detach(task, name);
+      for (const name of [...(this.live.get(task.id)?.keys() ?? [])]) all.push(this.detach(task, name, 2000));
     }
+    await Promise.all(all);
   }
 
   // --- agents --------------------------------------------------------------
@@ -614,10 +658,88 @@ export class TaskManager {
       brief: opts.prompt,
       lastReport: null,
       costUsd: 0,
+      spawnedAt: now(),
+      closedAt: null,
+      activeMs: 0,
     };
+    // Singletons (orchestrator, planner) never wait: the user is talking with them. Decide before
+    // adding it, or it would count itself as working.
+    const queue = !existing && !SINGLETON_ROLES.has(roleName) && (this.atCapacity() || this.queued().length > 0);
     if (!existing) task.agents.push(agent);
+    if (queue) {
+      agent.state = 'queued';
+      return agent;
+    }
     await this.launch(task, agent, { prompt: opts.prompt, resume: null, images: opts.images });
     return agent;
+  }
+
+  // --- concurrency ---------------------------------------------------------
+
+  /** Agents working right now, across all tasks (waiting on an answer doesn't count). */
+  private working(): number {
+    let n = 0;
+    for (const t of this.tasks.values()) {
+      if (!LIVE_PHASES.includes(t.phase) && !FINISHED_PHASES.includes(t.phase)) continue;
+      for (const a of t.agents) if (a.role !== 'orchestrator' && a.state === 'active' && a.busy && !a.pendingQuestion) n++;
+    }
+    return n;
+  }
+
+  private atCapacity(): boolean {
+    return MAX_AGENTS > 0 && this.working() >= MAX_AGENTS;
+  }
+
+  /** Queued agents of running tasks (and validators kept past finish), oldest spawn first. */
+  private queued(): { task: Task; agent: TaskAgent }[] {
+    return [...this.tasks.values()]
+      .filter((t) => LIVE_PHASES.includes(t.phase) || FINISHED_PHASES.includes(t.phase))
+      .flatMap((t) => t.agents.filter((a) => a.state === 'queued').map((a) => ({ task: t, agent: a })))
+      .sort((x, y) => x.agent.spawnedAt.localeCompare(y.agent.spawnedAt));
+  }
+
+  private scheduleDrain(): void {
+    if (this.drainPending) return;
+    this.drainPending = true;
+    setTimeout(() => {
+      this.drainPending = false;
+      void this.drain();
+    }, 0);
+  }
+
+  /** Start queued agents while there are free slots. */
+  private async drain(): Promise<void> {
+    if (this.draining) {
+      this.drainAgain = true;
+      return;
+    }
+    this.draining = true;
+    try {
+      do {
+        this.drainAgain = false;
+        for (const { task, agent } of this.queued()) {
+          if (this.atCapacity()) break;
+          agent.state = 'active'; // claim the slot before awaiting
+          const waited = Math.round((Date.now() - Date.parse(agent.spawnedAt)) / 60_000);
+          try {
+            await this.launch(task, agent, { prompt: agent.brief, resume: null });
+            this.note(task, agent, `started ${agent.name} from the queue${waited ? ` (waited ${waited} min)` : ''}`);
+          } catch (err) {
+            agent.state = 'reported';
+            agent.busy = false;
+            this.toOrchestrator(task, `[steffe] ${this.who(task, agent)} could not start: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          this.changed(task);
+        }
+      } while (this.drainAgain);
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  private note(task: Task, agent: TaskAgent, text: string): void {
+    const item = agent.itemId ? task.plan?.items.find((i) => i.id === agent.itemId) : undefined;
+    item?.notes.push({ at: now(), by: 'steffe', text });
   }
 
   /** Bring a persisted agent back: resume its Claude session if it has one, else start over from its brief. */
@@ -642,7 +764,7 @@ export class TaskManager {
     // A role may gain `port: true` after the agent was created (e.g. a resumed planner).
     if (role.port && agent.port == null) agent.port = await reservePort();
     if (agent.port != null) claimPort(agent.port);
-    this.carriedCost.set(`${task.id}:${agent.name}`, agent.costUsd);
+    this.carried.set(`${task.id}:${agent.name}`, { cost: agent.costUsd, resumed: !!opts.resume, activeMs: agent.activeMs });
     const artifacts = artifactsDir(task.id);
     await mkdir(artifacts, { recursive: true });
 
@@ -699,29 +821,41 @@ export class TaskManager {
         writableRoots: role.writable === 'cwd' ? [agent.cwd] : [],
         onTurnEnd: (s) => this.onTurnEnd(task.id, agent.name, s),
         onExit: (s) => this.onExit(task.id, agent.name, s),
+        onBackgroundChange: (s) => this.onBackgroundChange(task.id, agent.name, s),
       },
     );
     if (opts.images?.length) session.send(opts.prompt, opts.images);
     agent.sessionId = session.id;
     agent.state = 'active';
+    agent.closedAt = null; // a stopped orchestrator (or agent) brought back
     let live = this.live.get(task.id);
     if (!live) this.live.set(task.id, (live = new Map()));
     live.set(agent.name, session);
   }
 
-  /** Drop a live session without changing the agent's state (pause / shutdown). */
-  private detach(task: Task, name: string): void {
+  /**
+   * Drop a live session without changing the agent's state (pause / shutdown). A running turn is
+   * interrupted first: its cost only arrives with its result.
+   */
+  private async detach(task: Task, name: string, timeoutMs?: number): Promise<void> {
     const s = this.live.get(task.id)?.get(name);
     this.live.get(task.id)?.delete(name);
+    clearTimeout(this.backgroundTimers.get(`${task.id}:${name}`));
+    if (!s) return;
+    await s.stop(timeoutMs);
     this.syncFrom(task, name, s);
-    s?.close();
   }
 
   /** The agent is done for good. */
   private async stopAgent(task: Task, name: string): Promise<void> {
-    this.detach(task, name);
+    await this.detach(task, name);
     const agent = task.agents.find((a) => a.name === name);
     if (!agent) return;
+    if (agent.state !== 'closed') {
+      agent.closedAt = now();
+      const mins = Math.round(agent.activeMs / 60_000);
+      this.note(task, agent, `closed ${agent.name}${agent.state === 'queued' ? ' before it started' : ` · ${mins} min active · $${agent.costUsd.toFixed(2)}`}`);
+    }
     agent.state = 'closed';
     agent.busy = false;
     agent.pendingQuestion = null;
@@ -735,7 +869,10 @@ export class TaskManager {
     const a = task.agents.find((x) => x.name === name);
     if (!a || !s) return;
     a.claudeSessionId = s.claudeSessionId ?? a.claudeSessionId;
-    a.costUsd = (this.carriedCost.get(`${task.id}:${name}`) ?? 0) + s.totalCostUsd;
+    const c = this.carried.get(`${task.id}:${name}`) ?? { cost: 0, resumed: false, activeMs: 0 };
+    // max, not sum: a resumed session reports the earlier turns' cost too.
+    a.costUsd = c.resumed ? Math.max(c.cost, s.totalCostUsd) : c.cost + s.totalCostUsd;
+    a.activeMs = c.activeMs + s.activeMs();
   }
 
   private onTurnEnd(taskId: string, name: string, s: ManagedSession): void {
@@ -745,8 +882,12 @@ export class TaskManager {
 
     if (agent.role === 'orchestrator') {
       if (task.phase === 'review' && this.finishing.delete(taskId)) {
-        // Free the process; the user can still message it, which resumes it.
-        void this.stopAgent(task, name).then(() => this.changed(task));
+        // Free the process; the user can still message it, which resumes it. Reports from validators
+        // kept running past finish may have arrived meanwhile: wake it up for those.
+        void this.stopAgent(task, name).then(() => {
+          this.changed(task);
+          if (task.inbox.length) this.wake(task);
+        });
         return;
       }
       if (task.inbox.length) {
@@ -775,17 +916,66 @@ export class TaskManager {
           };
         }
       }
-    } else if (agent.role !== 'orchestrator' && agent.busy && !agent.pendingQuestion) {
-      // Ended its turn without calling report: forward what it said so the hub isn't left waiting.
-      agent.busy = false;
-      agent.state = 'reported';
-      agent.lastReport = `(no report) ${s.lastAssistantText}`;
-      this.toOrchestrator(
-        task,
-        `[steffe] ${this.who(task, agent)} ended its turn without calling report. Its last message:\n\n${s.lastAssistantText || '(empty)'}`,
-      );
+    } else if (agent.busy && !agent.pendingQuestion) {
+      // Waiting on its own background command (a commit hook, a test run): the CLI starts a new
+      // turn when it ends, so it is still working.
+      if (!s.backgroundTasks.length) this.noReport(task, agent, s);
+    } else if (!agent.busy && FINISHED_PHASES.includes(task.phase)) {
+      // A validator kept running past finish has reported: nothing more for it to do.
+      void this.retire(task, agent).then(() => this.changed(task));
     }
     this.changed(task);
+  }
+
+  /** It ended its turn without calling report: forward what it said so the hub isn't left waiting. */
+  private noReport(task: Task, agent: TaskAgent, s: ManagedSession): void {
+    agent.busy = false;
+    agent.state = 'reported';
+    agent.lastReport = `(no report) ${s.lastAssistantText}`;
+    this.toOrchestrator(
+      task,
+      `[steffe] ${this.who(task, agent)} ended its turn without calling report. Its last message:\n\n${s.lastAssistantText || '(empty)'}`,
+    );
+    if (FINISHED_PHASES.includes(task.phase)) void this.retire(task, agent).then(() => this.changed(task));
+  }
+
+  /** Close an agent that worked past finish, and the item worktree it kept alive. */
+  private async retire(task: Task, agent: TaskAgent): Promise<void> {
+    await this.stopAgent(task, agent.name);
+    const item = agent.itemId ? task.plan?.items.find((i) => i.id === agent.itemId) : undefined;
+    if (!item?.worktreePath || item.kind === 'design') return;
+    if (task.agents.some((a) => a.state !== 'closed' && a.cwd === item.worktreePath)) return;
+    if (!FINISHED_PHASES.includes(task.phase)) return; // reopened meanwhile: the worktree is in use again
+    await removeWorktree(this.project(task).path, item.worktreePath);
+    item.worktreePath = null;
+  }
+
+  /**
+   * Its background commands are done. The CLI normally starts a new turn right away; if it stays
+   * idle, treat it like any turn that ended without a report.
+   */
+  private onBackgroundChange(taskId: string, name: string, s: ManagedSession): void {
+    const key = `${taskId}:${name}`;
+    clearTimeout(this.backgroundTimers.get(key));
+    if (s.backgroundTasks.length) return;
+    const stillIdle = () => {
+      const task = this.tasks.get(taskId);
+      const agent = task?.agents.find((a) => a.name === name);
+      if (!task || !agent || this.live.get(taskId)?.get(name) !== s) return null;
+      if (s.status !== 'idle' || s.backgroundTasks.length || !agent.busy || agent.pendingQuestion) return null;
+      return { task, agent };
+    };
+    if (!stillIdle()) return;
+    this.backgroundTimers.set(
+      key,
+      setTimeout(() => {
+        this.backgroundTimers.delete(key);
+        const hit = stillIdle();
+        if (!hit) return;
+        this.noReport(hit.task, hit.agent, s);
+        this.changed(hit.task);
+      }, BACKGROUND_GRACE_MS),
+    );
   }
 
   private onExit(taskId: string, name: string, s: ManagedSession): void {
@@ -818,11 +1008,28 @@ export class TaskManager {
   private toOrchestrator(task: Task, text: string): void {
     this.nudges.set(task.id, 0);
     const orch = this.live.get(task.id)?.get('orchestrator');
-    if (orch && (orch.status === 'idle' || orch.status === 'running' || orch.status === 'starting')) {
+    // A finishing orchestrator is stopped when its turn ends: queue it, and wake it after (a failed
+    // finish leaves it running, and its turn end delivers the inbox).
+    const finishing = this.finishing.has(task.id) || task.phase === 'finishing';
+    if (!finishing && orch && (orch.status === 'idle' || orch.status === 'running' || orch.status === 'starting')) {
       orch.send(text);
     } else {
       task.inbox.push(text);
+      // Finished tasks have no live orchestrator to pick it up later (live tasks are resumed with their inbox).
+      if (!finishing && FINISHED_PHASES.includes(task.phase)) this.wake(task);
     }
+  }
+
+  /** Restart a stopped orchestrator to read its inbox. */
+  private wake(task: Task): void {
+    if (this.reviving.has(task.id)) return;
+    this.reviving.add(task.id);
+    void this.reviveOrchestrator(task, null)
+      .catch((err) => console.error(`[steffe] could not wake the orchestrator of ${task.id}:`, err))
+      .finally(() => {
+        this.reviving.delete(task.id);
+        this.changed(task);
+      });
   }
 
   // --- tools ---------------------------------------------------------------
@@ -850,7 +1057,14 @@ export class TaskManager {
       addItems: (items) => run((t) => this.addItems(t, items)),
       startWork: (spec, items, type) =>
         run(async (t) => {
-          if (t.phase !== 'triage') throw new Error(`start_work is a triage decision; the task is ${t.phase}`);
+          if (t.phase !== 'triage') {
+            const hint = FINISHED_PHASES.includes(t.phase)
+              ? ' To make changes to a finished task, call add_items with the change: it reopens the task, and finish afterwards updates the same PR.'
+              : t.phase === 'executing' || t.phase === 'escalated'
+                ? ' To add work while executing, call add_items.'
+                : '';
+            throw new Error(`start_work is a triage decision; the task is ${t.phase}.${hint}`);
+          }
           if (!items.length) throw new Error('the plan needs at least one work item');
           this.setPlan(t, spec, items);
           const wt = await this.ensureWorktree(t, type);
@@ -902,7 +1116,7 @@ export class TaskManager {
           t.phase = 'escalated';
           return 'Question sent to the user. End your turn now; the answer will arrive as a [steffe] message.';
         }),
-      finish: (prTitle, report, draft) => run((t) => this.finish(t, prTitle, report, draft)),
+      finish: (prTitle, report, draft, keepValidators) => run((t) => this.finish(t, prTitle, report, draft, keepValidators)),
       askOrchestrator: (question) =>
         run((t) => {
           const agent = t.agents.find((a) => a.name === caller)!;
@@ -939,7 +1153,11 @@ export class TaskManager {
   }
 
   private async startPlanning(task: Task, brief: string, type: BranchType): Promise<string> {
-    if (task.phase !== 'triage') throw new Error(`start_planning is a triage decision; the task is ${task.phase}`);
+    if (task.phase !== 'triage') {
+      throw new Error(
+        `start_planning is a triage decision; the task is ${task.phase}.${FINISHED_PHASES.includes(task.phase) || task.phase === 'executing' ? ' Use add_items to add or change work.' : ''}`,
+      );
+    }
     const cwd = await this.ensureWorktree(task, type);
     task.phase = 'planning';
     await this.startAgent(task, 'planner', {
@@ -1047,6 +1265,10 @@ export class TaskManager {
       const s = next[roleName];
       if (s && item.status !== 'needs_fix' && item.status !== 'merged' && item.status !== 'done') item.status = s;
     }
+    this.note(task, agent, agent.state === 'queued' ? `queued ${agent.name}: all agent slots are busy` : `spawned ${agent.name}`);
+    if (agent.state === 'queued') {
+      return `${agent.name} is queued: ${MAX_AGENTS} agents are already working (STEFFE_MAX_AGENTS). It starts in ${cwd} by itself when a slot frees up, and its report arrives as usual. Keep dispatching; end your turn when you have nothing else to do.`;
+    }
     return `Started ${agent.name} in ${cwd}${agent.port != null ? ` (port ${agent.port})` : ''}. Its report will arrive as a [steffe] message; end your turn when you have nothing else to dispatch.`;
   }
 
@@ -1054,6 +1276,10 @@ export class TaskManager {
     const agent = task.agents.find((a) => a.name === name);
     if (!agent) throw new Error(`no agent named ${name}`);
     if (agent.role === 'orchestrator') throw new Error('cannot message yourself');
+    if (agent.state === 'queued') {
+      agent.brief += `\n\n[from orchestrator, sent while you were queued]\n\n${text}`;
+      return `${name} has not started yet (queued); your message is added to its brief.`;
+    }
     const item = agent.itemId ? task.plan?.items.find((i) => i.id === agent.itemId) : undefined;
     const answering = agent.pendingQuestion;
     if (!answering && item?.status === 'blocked' && agent.role === 'developer') {
@@ -1119,6 +1345,12 @@ export class TaskManager {
     return `Merged ${item.branch} into ${task.branch}. Mark it done with update_item when nothing else is pending for it.`;
   }
 
+  private backgroundText(task: Task, agent: TaskAgent): string {
+    const s = this.live.get(task.id)?.get(agent.name);
+    if (!s?.backgroundTasks.length || s.status !== 'idle') return '';
+    return ` (waiting for its background command: ${s.backgroundTasks.map((b) => b.description).join('; ').slice(0, 200)})`;
+  }
+
   private statusText(task: Task): string {
     const items = (task.plan?.items ?? []).map(
       (i) =>
@@ -1128,7 +1360,7 @@ export class TaskManager {
       .filter((a) => a.role !== 'orchestrator')
       .map(
         (a) =>
-          `- ${a.name} (${a.role}${a.itemId ? `, item ${a.itemId}` : ''}): ${a.state}${a.pendingQuestion ? `, WAITING FOR YOUR ANSWER: ${a.pendingQuestion.slice(0, 300)}` : a.busy ? ', working' : ''}${a.lastReport ? `\n  last report: ${a.lastReport.slice(0, 200)}` : ''}`,
+          `- ${a.name} (${a.role}${a.itemId ? `, item ${a.itemId}` : ''}): ${a.state}${a.pendingQuestion ? `, WAITING FOR YOUR ANSWER: ${a.pendingQuestion.slice(0, 300)}` : a.state === 'queued' ? ', waiting for a free slot' : a.busy ? `, working${this.backgroundText(task, a)}` : ''}, ${Math.round(a.activeMs / 60_000)} min active${a.lastReport ? `\n  last report: ${a.lastReport.slice(0, 200)}` : ''}`,
       );
     return [
       `Task "${task.title}" is ${task.phase}. Branch ${task.branch} (base ${task.baseBranch}).`,
@@ -1144,12 +1376,19 @@ export class TaskManager {
       .join('\n');
   }
 
-  private async finish(task: Task, prTitle: string, report: string, draft: boolean): Promise<string> {
+  private async finish(task: Task, prTitle: string, report: string, draft: boolean, keepValidators: boolean): Promise<string> {
     const project = this.project(task);
     const open = (task.plan?.items ?? []).filter((i) => i.status !== 'merged' && i.status !== 'done');
     if (open.length) throw new Error(`items not merged yet: ${open.map((i) => `${i.id} [${i.status}]`).join(', ')}`);
-    const busy = task.agents.filter((a) => a.busy && a.role !== 'orchestrator');
-    if (busy.length) throw new Error(`agents still working: ${busy.map((a) => a.name).join(', ')}`);
+    const busy = task.agents.filter((a) => a.busy && a.role !== 'orchestrator' && a.state !== 'closed');
+    const kept = keepValidators ? busy.filter((a) => VALIDATOR_ROLES.has(a.role)) : [];
+    const blocking = busy.filter((a) => !kept.includes(a));
+    if (blocking.length) {
+      const onlyValidators = blocking.every((a) => VALIDATOR_ROLES.has(a.role));
+      throw new Error(
+        `agents still working: ${blocking.map((a) => a.name).join(', ')}${onlyValidators ? '. If the user asked to wrap up now, call finish with keep_validators: true: they keep running after the PR is opened and their reports reach you in review.' : ''}`,
+      );
+    }
     const items = task.plan?.items ?? [];
     if (items.length && items.every((i) => i.kind === 'design')) return this.finishDesignOnly(task, prTitle, report);
     const wt = this.worktree(task);
@@ -1203,15 +1442,23 @@ export class TaskManager {
       result = `Pull request opened: ${task.prUrl}`;
     }
 
-    await this.windDown(task, project);
-    return `${result}\nThe task is now in review: the user tests it and may ask you for changes (add_items reopens the task). Reply with a one-line summary and stop.`;
+    await this.windDown(task, project, kept);
+    const still = kept.length
+      ? `\nStill validating: ${kept.map((a) => this.who(task, a)).join(', ')}. Their reports wake you in review: tell the user the outcome; if they found problems, propose the fixes (add_items reopens the task).`
+      : '';
+    return `${result}\nThe task is now in review: the user tests it and may ask you for changes (add_items reopens the task).${still} Reply with a one-line summary and stop.`;
   }
 
-  /** Subagents and item worktrees go; the task worktree stays for local testing. Branches are kept. */
-  private async windDown(task: Task, project: Project): Promise<void> {
-    for (const a of task.agents) if (a.role !== 'orchestrator' && a.state !== 'closed') await this.stopAgent(task, a.name);
+  /**
+   * Subagents and item worktrees go; the task worktree stays for local testing. Branches are kept.
+   * `keep`: validators that run on after finish, with the item worktrees they work in.
+   */
+  private async windDown(task: Task, project: Project, keep: TaskAgent[] = []): Promise<void> {
+    for (const a of task.agents) {
+      if (a.role !== 'orchestrator' && a.state !== 'closed' && !keep.includes(a)) await this.stopAgent(task, a.name);
+    }
     for (const item of task.plan?.items ?? []) {
-      if (item.worktreePath) {
+      if (item.worktreePath && !keep.some((a) => a.cwd === item.worktreePath)) {
         await removeWorktree(project.path, item.worktreePath);
         item.worktreePath = null;
       }

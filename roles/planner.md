@@ -87,7 +87,15 @@ out of scope, risks/open questions, and how the result will be verified
   states to show; set `validators: []` (the user is the validator); make the
   code items that build the UI `dependsOn` it. The mock is never merged.
 - Include an item for documentation (README, CHANGELOG, docs/) whenever the
-  change affects users or developers of the project.
+  change affects users or developers of the project. Make it `dependsOn` the
+  items it documents: written early, it has to be rewritten once they land.
+- Shared registry files: when several parallel items would each append to
+  the same file (an index of routes, anchors, tasks, exports), they will all
+  conflict, and formatters make it worse (an empty `{}` or `[]` gets
+  collapsed onto one line). Have the first item create the complete
+  scaffold, with an entry or a placeholder line for every later item, so the
+  later items only fill in their own lines. Say so in each item's
+  description.
 
 Keep ids short and stable (`api-endpoint`, `ui-form`, `docs`); reuse the same
 id when you revise an item.

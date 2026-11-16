@@ -48,9 +48,27 @@ export interface AgentSessionConfig {
   onTurnEnd?: (session: ManagedSession) => void;
   /** Called once when the query ends: closed, completed, or crashed (status 'error'). */
   onExit?: (session: ManagedSession) => void;
+  /** Called when the set of running background commands (run_in_background shells, monitors) changes. */
+  onBackgroundChange?: (session: ManagedSession) => void;
+}
+
+/** A command the agent started in the background. The CLI starts a new turn by itself when it ends. */
+export interface BackgroundTask {
+  id: string;
+  type: string;
+  description: string;
 }
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+
+/**
+ * Steffe's own environment minus what describes Steffe itself: its PORT (set by `npm run dev`)
+ * would otherwise make an agent without a private port start the project's app on Steffe's port.
+ */
+function agentBaseEnv(): Record<string, string | undefined> {
+  const { PORT: _port, STEFFE_SERVER: _server, STEFFE_WEB_PORT: _web, ...rest } = process.env;
+  return rest;
+}
 
 function isInside(root: string, path: string): boolean {
   const rel = relative(resolve(root), resolve(path));
@@ -79,6 +97,14 @@ export class ManagedSession {
   updatedAt = this.createdAt;
   /** Text of the most recent assistant message, for agent turn-end handoffs. */
   lastAssistantText = '';
+  /** Background commands still running (ambient watchers excluded). */
+  backgroundTasks: BackgroundTask[] = [];
+  /** Time spent in turns (status running) by this process. */
+  private activeMsDone = 0;
+  private runningSince: number | null = null;
+  /** stop() is interrupting the turn: its result is expected, not an error to show. */
+  private stopping = false;
+  private turnEnded: (() => void) | null = null;
 
   readonly transcript: TranscriptEntry[] = [];
   readonly pendingPermissions = new Map<string, PendingPermission>();
@@ -148,7 +174,7 @@ export class ManagedSession {
     if (a) {
       options.mcpServers = a.mcpServers;
       options.disallowedTools = a.disallowedTools;
-      options.env = { ...process.env, ...a.env };
+      options.env = { ...agentBaseEnv(), ...a.env };
       options.plugins = a.plugins?.map((path) => ({ type: 'local' as const, path }));
     }
     this.q = query({ prompt: this.input, options });
@@ -170,6 +196,31 @@ export class ManagedSession {
 
   async interrupt(): Promise<void> {
     await this.q?.interrupt();
+  }
+
+  /** Milliseconds this session has spent working on turns, including the current one. */
+  activeMs(): number {
+    return this.activeMsDone + (this.runningSince != null ? Date.now() - this.runningSince : 0);
+  }
+
+  /**
+   * Close, but first interrupt a running turn and wait (briefly) for its result: the cost of a
+   * turn is only reported in its result, so closing mid-turn would lose it.
+   */
+  async stop(timeoutMs = 5000): Promise<void> {
+    if (this.status === 'running' && this.q) {
+      this.stopping = true;
+      const ended = new Promise<void>((resolve) => (this.turnEnded = resolve));
+      try {
+        await Promise.race([
+          this.q.interrupt().then(() => ended),
+          new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+        ]);
+      } catch {
+        // The query may already be gone; close regardless.
+      }
+    }
+    this.close();
   }
 
   close(): void {
@@ -273,10 +324,19 @@ export class ManagedSession {
           this.claudeSessionId = msg.session_id;
           this.model = msg.model;
           this.touch();
+        } else if (msg.subtype === 'background_tasks_changed') {
+          this.backgroundTasks = msg.tasks
+            .filter((t) => !t.ambient)
+            .map((t) => ({ id: t.task_id, type: t.task_type, description: t.description }));
+          this.agent?.onBackgroundChange?.(this);
+        } else if (msg.subtype === 'task_notification') {
+          this.addEntry(systemEntry(msg.uuid, `Background task ${msg.status}: ${msg.summary}`));
         }
         break;
       case 'stream_event': {
         const ev = msg.event;
+        // The CLI starts turns by itself too (a background command finished): show them as running.
+        if (ev.type === 'message_start' && this.status === 'idle') this.setStatus('running');
         if (ev.type === 'message_start') {
           this.partialId = msg.uuid;
           this.partialText = '';
@@ -306,6 +366,11 @@ export class ManagedSession {
       case 'result':
         this.totalCostUsd = msg.total_cost_usd;
         this.numTurns = msg.num_turns;
+        if (this.stopping) {
+          this.turnEnded?.();
+          this.turnEnded = null;
+          break;
+        }
         if (msg.subtype !== 'success') {
           this.lastError = msg.errors.join('\n') || msg.subtype;
           this.addEntry(systemEntry(msg.uuid, `Turn ended with ${msg.subtype}: ${this.lastError}`));
@@ -326,6 +391,11 @@ export class ManagedSession {
   }
 
   private setStatus(status: SessionStatus): void {
+    if (status === 'running' && this.runningSince == null) this.runningSince = Date.now();
+    if (status !== 'running' && status !== 'starting' && this.runningSince != null) {
+      this.activeMsDone += Date.now() - this.runningSince;
+      this.runningSince = null;
+    }
     this.status = status;
     this.touch();
   }

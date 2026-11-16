@@ -9,14 +9,6 @@ const FIRST = Number(process.env.STEFFE_AGENT_PORT_BASE ?? 41000);
 const LAST = FIRST + 999;
 const reserved = new Set<number>();
 
-function isFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const srv = createServer();
-    srv.once('error', () => resolve(false));
-    srv.listen({ port, host: '127.0.0.1', exclusive: true }, () => srv.close(() => resolve(true)));
-  });
-}
-
 // A port only counts as free if nothing listens on it on any of these. On macOS
 // binding `::` succeeds even when another app holds 127.0.0.1, which would
 // silently shadow that app on localhost.
@@ -44,15 +36,15 @@ export async function findFreePort(start: number): Promise<number> {
 
 /**
  * Reserve a free port for an agent. Ports are spaced 10 apart so an app that
- * needs a couple of extra ports (PORT+1 for an API, ...) still won't collide.
+ * needs a couple of extra ports (PORT+1 for an API, ...) still won't collide;
+ * the agent is told PORT..PORT+9 are its own, so all ten must be free.
  */
 export async function reservePort(): Promise<number> {
-  for (let p = FIRST; p <= LAST; p += 10) {
+  next: for (let p = FIRST; p <= LAST; p += 10) {
     if (reserved.has(p)) continue;
-    if (await isFree(p)) {
-      reserved.add(p);
-      return p;
-    }
+    for (let q = p; q < p + 10; q++) if (!(await isFreeEverywhere(q))) continue next;
+    reserved.add(p);
+    return p;
   }
   throw new Error('no free agent ports');
 }

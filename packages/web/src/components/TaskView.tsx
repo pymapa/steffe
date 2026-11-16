@@ -90,9 +90,13 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
       {a.pendingQuestion && (
         <span className="badge" title={`Waiting for the orchestrator: ${a.pendingQuestion}`}>Q</span>
       )}
+      {a.state === 'queued' && (
+        <span className="badge" title="Queued: starts when an agent slot frees up">…</span>
+      )}
     </>
   );
-  const agentTitle = (a: TaskAgent) => `${a.role}${a.itemId ? ` · ${a.itemId}` : ''} · ${a.cwd}`;
+  const agentTitle = (a: TaskAgent) =>
+    `${a.role}${a.itemId ? ` · ${a.itemId}` : ''} · ${formatMinutes(a.activeMs)} active · $${a.costUsd.toFixed(2)} · ${a.cwd}`;
 
   return (
     <div className="task-view">
@@ -364,7 +368,9 @@ function StoredAgent({ task, agent, composer }: { task: Task; agent: TaskAgent; 
       <header className="session-header">
         <div className="muted">
           <strong>{agent.name}</strong> is not running ({agent.state})
-          {task.phase === 'paused'
+          {agent.state === 'queued'
+            ? ': it starts by itself when an agent slot frees up.'
+            : task.phase === 'paused'
             ? '. Resume the task to bring it back.'
             : composer
               ? '. Send a message to bring it back.'
@@ -529,4 +535,10 @@ function ItemCard({ item, task, onAgent }: { item: WorkItem; task: Task; onAgent
       )}
     </div>
   );
+}
+
+/** Agent working time, e.g. "12 min" or "1 h 05 min". */
+function formatMinutes(ms: number): string {
+  const min = Math.round((ms ?? 0) / 60_000);
+  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
 }

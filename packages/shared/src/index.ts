@@ -209,7 +209,8 @@ export interface TaskPlan {
   items: WorkItem[];
 }
 
-export type TaskAgentState = 'active' | 'reported' | 'closed';
+/** queued: spawned, waiting for a free slot (STEFFE_MAX_AGENTS) before it starts. */
+export type TaskAgentState = 'queued' | 'active' | 'reported' | 'closed';
 
 export interface TaskAgent {
   /** Steffe session id (changes when an agent is resumed after a restart). */
@@ -230,6 +231,12 @@ export interface TaskAgent {
   brief: string;
   lastReport: string | null;
   costUsd: number;
+  /** When the orchestrator spawned it (it may have waited in the queue before starting). */
+  spawnedAt: string;
+  /** When it was closed for good; null while it can still be messaged. */
+  closedAt: string | null;
+  /** Time spent working on turns, across restarts. */
+  activeMs: number;
 }
 
 export interface TaskQuestion {

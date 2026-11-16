@@ -114,6 +114,12 @@ questions to what you need to write a correct plan.
   promptly: a waiting agent blocks its item. If the answer changes what other
   agents should do, tell them too.
 - `close_agent` when an agent's work is done, to free resources.
+- Only a few agents work at once (across all tasks). Past that, `spawn_agent`
+  queues the agent: it starts by itself when a slot frees up and reports as
+  usual. Keep dispatching; there is no need to hold back or retry.
+- An agent waiting on a background command it started (a slow commit hook
+  or test run) is still working: `task_status` shows it, and it continues by
+  itself when the command ends. Don't nudge it.
 - `ask_user` only when you are truly blocked: an ambiguity the plan doesn't
   settle, the retry cap was hit, or something outside the task is broken.
   Then end your turn and wait for the answer.
@@ -128,7 +134,10 @@ questions to what you need to write a correct plan.
    they changed.
 3. If the item lists `tester`, spawn a **tester** with the acceptance
    criteria and how to exercise them (status `testing`). Reviewer and tester
-   may run in parallel.
+   may run in parallel. Testers are the most expensive validators: when you
+   plan a final integration tester on the task branch anyway, a low-risk item
+   (copy, a static list, a small style change) can skip its own tester and
+   leave that to the integration run. Say so in the item's note.
 4. Any failure: set `needs_fix` with a note, and message the developer the
    concrete findings. Steffe counts fix rounds; after 3 the item becomes
    `blocked` and you must `ask_user`.
@@ -182,6 +191,12 @@ When every item is merged (design items: done):
    per item, how it was verified (tests, reviewer and tester results),
    documentation updated, follow-ups and known limitations. The report becomes
    the PR description, so write it for a human reviewer.
+4. If the user asks you to wrap up now (hand off, open the PR) while
+   reviewers or testers are still running, don't stop them and don't merge
+   unvalidated work silently: call `finish` with `keep_validators: true`.
+   They keep running, and their reports wake you in review; then tell the
+   user the outcome and, on problems, propose fixes (`add_items`). Say in the
+   report which validation was still running.
 
 ## After finish: review
 
@@ -199,5 +214,8 @@ problem or want an adjustment:
 2. Dispatch, validate and merge as usual.
 3. `finish` again with an updated report. It pushes and updates the same
    PR, and the task returns to review.
+
+`start_work` and `start_planning` only work in triage; on a finished task,
+`add_items` is the way to make changes.
 
 Questions about the result need no reopening: answer them in chat.

@@ -20,7 +20,7 @@ export interface ToolHost {
   mergeItem(itemId: string): Promise<string>;
   taskStatus(): Promise<string>;
   askUser(question: string, images: string[], links: { label: string; url: string }[]): Promise<string>;
-  finish(prTitle: string, report: string, draft: boolean): Promise<string>;
+  finish(prTitle: string, report: string, draft: boolean, keepValidators: boolean): Promise<string>;
   report(outcome: string, summary: string): Promise<string>;
   askOrchestrator(question: string): Promise<string>;
 }
@@ -70,7 +70,7 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
     ),
     tool(
       'start_planning',
-      'Triage decision for work that needs a plan: start an autonomous planner. Its questions (ask the user in chat, answer with message_agent) and its report when the plan is ready arrive as [steffe] messages.',
+      'Triage decision, only when the user asked for a planner (or agreed to your suggestion of one): start an autonomous planner. Its questions (ask the user in chat, answer with message_agent) and its report when the plan is ready arrive as [steffe] messages.',
       {
         brief: z
           .string()
@@ -81,7 +81,7 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
     ),
     tool(
       'start_work',
-      'Triage decision for trivial work, or a design-only request: set a small plan yourself (usually one item; a single design item for "just the design") and start executing it right away, without a planner or plan approval. Then spawn the developer or designer.',
+      'Default triage decision for a change request: write the plan yourself (usually one item; a single design item for "just the design", design items only when the user asked for a design) and start executing it right away, without a planner or plan approval. Then spawn the developer or designer.',
       { spec: z.string().describe('markdown spec: goal, approach, how it is verified'), items: z.array(planItem), branch_type: branchType },
       wrap(({ spec, items, branch_type }) => host.startWork(spec, items, branch_type)),
     ),
@@ -93,7 +93,7 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
     ),
     tool(
       'add_items',
-      'Add work items to the plan while executing, e.g. code items after the user approved a design-only start and wants it built. On a finished task (review or done) it reopens the task for changes the user asks for: the task worktree comes back and the task executes again; finish afterwards updates the same PR. Same shape as plan items.',
+      'Add work items to the plan while executing, e.g. code items after the user approved a design-only start and wants it built. On a finished task (review or done) it reopens the task for changes the user asks for (start_work and start_planning only work in triage): the task executes again; finish afterwards updates the same PR. Same shape as plan items.',
       { items: z.array(planItem) },
       wrap(({ items }) => host.addItems(items)),
     ),
@@ -160,8 +160,14 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
         prTitle: z.string(),
         report: z.string().describe('markdown report: summary, changes, verification, docs, follow-ups'),
         draft: z.boolean().default(false),
+        keep_validators: z
+          .boolean()
+          .default(false)
+          .describe(
+            'only when the user asked to wrap up now: reviewers/testers still running keep going after the PR is opened instead of blocking finish; their reports wake you in review',
+          ),
       },
-      wrap(({ prTitle, report, draft }) => host.finish(prTitle, report, draft)),
+      wrap(({ prTitle, report, draft, keep_validators }) => host.finish(prTitle, report, draft, keep_validators)),
     ),
     tool(
       'ask_orchestrator',

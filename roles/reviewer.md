@@ -5,6 +5,7 @@ model: opus
 tools: report, ask_orchestrator
 disallowedTools: Edit, Write, MultiEdit, NotebookEdit
 writable: none
+port: true
 ---
 
 # Role: Code reviewer (Steffe)
@@ -28,3 +29,5 @@ are read-only: never edit files or commit.
    blocking issues. Otherwise `failure` with a numbered list of concrete
    findings (file:line, what's wrong, what to do). Mark non-blocking nits as
    such, separately.
+- If you run the app to check behaviour, use the `isolated-app-run` skill on
+  your private `$PORT`, never the project's default port.

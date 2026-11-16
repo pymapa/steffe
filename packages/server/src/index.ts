@@ -335,7 +335,8 @@ server.listen(PORT, () => {
 });
 
 const shutdown = async () => {
-  tasks.closeAll();
+  // Interrupt running agent turns first (bounded): their cost is only reported when a turn ends.
+  await tasks.closeAll().catch(() => {});
   await tasks.flush().catch(() => {});
   manager.closeAll();
   wss.close();

@@ -18,6 +18,12 @@ don't connect to it, stop it, restart it or reuse its port.
    API), give each its own port from your range and point them at each other.
    If the project hard-codes a port and offers no override, report that as a
    blocker rather than taking the default port.
+   Pass the port explicitly on the command line (`PORT=$PORT npm run dev`,
+   `--port $PORT`) rather than editing `.env` files: env-file loaders such
+   as dotenv and `node --env-file` don't override a variable that is already
+   set in the shell, so an `.env` value may be silently ignored, or a stale
+   shell value used. After starting, check that the app really listens on
+   your port (`lsof -nP -iTCP:$PORT -sTCP:LISTEN`) before you test against it.
 3. **Run it in the background and record the PID**:
    `(<start command>) > /tmp/steffe-$PORT.log 2>&1 & echo $! > /tmp/steffe-$PORT.pid`
    Wait for readiness by polling (`curl -sf http://localhost:$PORT/...`) with a

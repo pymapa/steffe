@@ -21,9 +21,11 @@ Tasks (`packages/server/src/tasks.ts`, persisted in `~/.steffe/tasks/`) are
 teams of agent sessions working in git worktrees under `~/.steffe/worktrees/`.
 The orchestrator is the user's only contact and the hub: it starts every task
 in `triage`, in the project's main checkout (read only), with no branch or
-worktree. It answers questions in chat, or routes a change request to an autonomous planner (`start_planning`; the user
-approves the plan in chat via `approve_plan` or in the UI) or, when trivial or
-design only, straight to execution (`start_work`). Either one creates the task
+worktree. It answers questions in chat, or by default writes the plan itself and goes
+straight to execution (`start_work`). A planner (`start_planning`; the user
+approves the plan in chat via `approve_plan` or in the UI) or a designer is
+used only when the user asks for one; the orchestrator may suggest one when
+the task would greatly benefit from it. Either one creates the task
 branch and worktree. Every other agent runs
 autonomously; its `report`s and `ask_orchestrator` questions are delivered to
 the orchestrator as user messages. Roles live in `roles/*.md`, shared skills in `plugin/skills/`.
@@ -45,3 +47,6 @@ CLAUDE.md and skills.
   trivial prompt against a scratch directory. For tasks, run the server with
   `STEFFE_FORCE_MODEL=haiku`, a different `PORT` and a scratch
   `STEFFE_DATA_DIR`, against a scratch git repo.
+- At most `STEFFE_MAX_AGENTS` (default 4, 0 = no limit) task agents work at
+  once across all tasks; further spawns are queued (`TaskAgent.state`
+  `queued`) and started by `TaskManager.drain`.
