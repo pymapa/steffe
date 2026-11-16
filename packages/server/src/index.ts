@@ -24,8 +24,8 @@ import { readHistory } from './session.js';
 import { getPullRequest, listPullRequests } from './github.js';
 import { loadRoles } from './roles.js';
 import { createCatalogEntry, loadCatalog, saveCatalogEntry } from './catalog.js';
+import { findFreePort, isFreeEverywhere } from './ports.js';
 
-const PORT = Number(process.env.PORT ?? 4010);
 const manager = new SessionManager();
 const projects = new ProjectStore();
 const tasks = new TaskManager(manager, projects);
@@ -289,6 +289,13 @@ wss.on('connection', (ws) => {
 
 await projects.load();
 await tasks.load();
+// An explicit PORT (set by `npm run dev`, which also points the web proxy at
+// it) is used as is; without one, take the first free port from 4010.
+const PORT = process.env.PORT ? Number(process.env.PORT) : await findFreePort(4010);
+if (!(await isFreeEverywhere(PORT))) {
+  console.error(`steffe: port ${PORT} is already in use`);
+  process.exit(1);
+}
 server.listen(PORT, () => {
   console.log(`steffe server listening on http://localhost:${PORT}`);
 });

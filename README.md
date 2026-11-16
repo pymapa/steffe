@@ -20,16 +20,17 @@ packages/
 
 ```sh
 npm install
-npm run dev        # server on :4010, web on :5173 (proxies /api and /ws)
+npm run dev        # server on :4010, web on :3000 (proxies /api and /ws)
 ```
 
-Open http://localhost:5173.
+Open http://localhost:3000. If a port is taken, `npm run dev` moves to the next
+free one and prints which it picked.
 
 Auth: the SDK uses whatever credential Claude Code is configured with. If
 `claude` works in your terminal, Steffe works too. `ANTHROPIC_API_KEY` in the
 environment takes precedence if set.
 
-Env vars: `PORT` (server port, default 4010), `STEFFE_BROWSE_ROOT` (where the
+Env vars: `PORT` (server port, default 4010), `STEFFE_WEB_PORT` (web port, default 3000), `STEFFE_BROWSE_ROOT` (where the
 folder browser starts, default `$HOME`), `STEFFE_DATA_DIR` (where
 `projects.json` lives, default `~/.steffe`). Steffe was called Conductor: while
 `~/.conductor` exists it is used instead, because task worktrees and Claude

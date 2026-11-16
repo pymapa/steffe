@@ -2,11 +2,12 @@
 
 Local web UI that orchestrates Claude Code sessions via `@anthropic-ai/claude-agent-sdk`.
 npm workspaces: `packages/shared` (types), `packages/server` (Hono + ws, port 4010),
-`packages/web` (Vite + React, port 5173, proxies `/api` and `/ws` to the server).
+`packages/web` (Vite + React, port 3000, proxies `/api` and `/ws` to the server).
 
 ## Commands
 
-- `npm run dev` — both server and web with watch
+- `npm run dev` — both server and web with watch (`scripts/dev.mjs` picks free ports
+  from 4010 / 3000 and wires the proxy)
 - `npm run typecheck` — tsc across all packages (run before finishing a change)
 - `npm run build --workspace=@steffe/web` — production build of the UI
 

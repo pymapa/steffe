@@ -17,6 +17,31 @@ function isFree(port: number): Promise<boolean> {
   });
 }
 
+// A port only counts as free if nothing listens on it on any of these. On macOS
+// binding `::` succeeds even when another app holds 127.0.0.1, which would
+// silently shadow that app on localhost.
+const ALL_HOSTS = ['127.0.0.1', '0.0.0.0', '::1', '::'];
+
+function freeOn(port: number, host: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = createServer();
+    // Only EADDRINUSE/EACCES mean taken; e.g. EADDRNOTAVAIL means no IPv6 here.
+    srv.once('error', (e: NodeJS.ErrnoException) => resolve(e.code !== 'EADDRINUSE' && e.code !== 'EACCES'));
+    srv.listen({ port, host, exclusive: true }, () => srv.close(() => resolve(true)));
+  });
+}
+
+export async function isFreeEverywhere(port: number): Promise<boolean> {
+  for (const h of ALL_HOSTS) if (!(await freeOn(port, h))) return false;
+  return true;
+}
+
+/** First port from `start` that nothing listens on (used for Steffe's own server port). */
+export async function findFreePort(start: number): Promise<number> {
+  for (let p = start; p < start + 100; p++) if (await isFreeEverywhere(p)) return p;
+  throw new Error(`no free port in ${start}-${start + 99}`);
+}
+
 /**
  * Reserve a free port for an agent. Ports are spaced 10 apart so an app that
  * needs a couple of extra ports (PORT+1 for an API, ...) still won't collide.

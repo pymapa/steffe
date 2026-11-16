@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -k --raw \"npm:dev:server\" \"npm:dev:web\"",
+    "dev": "node scripts/dev.mjs",
     "dev:server": "npm run dev --workspace=@steffe/server",
     "dev:web": "npm run dev --workspace=@steffe/web",
     "build": "npm run build --workspaces --if-present",
