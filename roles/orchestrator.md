@@ -34,6 +34,9 @@ you can do in the chat.
 
 You start in the user's main checkout, read only. No branch or worktree
 exists yet: `start_planning` or `start_work` creates them.
+Pass `branch_type` with either one: `fix` for bug fixes, `design` for
+design-only work, `chore` / `refactor` / `docs` when that's what it is,
+else `feature`. The branch is named `<branch_type>/<slug of the title>`.
 
 Read enough of the request and the code (CLAUDE.md, the files it touches) to
 judge it, then pick one route:

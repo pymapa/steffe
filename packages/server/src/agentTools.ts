@@ -9,8 +9,8 @@ import { z } from 'zod';
  */
 export interface ToolHost {
   updatePlan(spec: string, items: PlanItemInput[]): Promise<string>;
-  startPlanning(brief: string): Promise<string>;
-  startWork(spec: string, items: PlanItemInput[]): Promise<string>;
+  startPlanning(brief: string, branchType: BranchType): Promise<string>;
+  startWork(spec: string, items: PlanItemInput[], branchType: BranchType): Promise<string>;
   approvePlan(): Promise<string>;
   addItems(items: PlanItemInput[]): Promise<string>;
   spawnAgent(role: string, itemId: string | null, brief: string): Promise<string>;
@@ -52,6 +52,14 @@ function wrap<A>(fn: (args: A) => Promise<string>) {
   };
 }
 
+export const BRANCH_TYPES = ['feature', 'fix', 'chore', 'refactor', 'docs', 'design'] as const;
+export type BranchType = (typeof BRANCH_TYPES)[number];
+
+const branchType = z
+  .enum(BRANCH_TYPES)
+  .default('feature')
+  .describe('kind of change; the task branch is named <branch_type>/<slug of the title>');
+
 export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerConfigWithInstance {
   const all = [
     tool(
@@ -67,14 +75,15 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
         brief: z
           .string()
           .describe('what the planner should know beyond the original request: what you learned from the user and the code, your sizing, open questions'),
+        branch_type: branchType,
       },
-      wrap(({ brief }) => host.startPlanning(brief)),
+      wrap(({ brief, branch_type }) => host.startPlanning(brief, branch_type)),
     ),
     tool(
       'start_work',
       'Triage decision for trivial work, or a design-only request: set a small plan yourself (usually one item; a single design item for "just the design") and start executing it right away, without a planner or plan approval. Then spawn the developer or designer.',
-      { spec: z.string().describe('markdown spec: goal, approach, how it is verified'), items: z.array(planItem) },
-      wrap(({ spec, items }) => host.startWork(spec, items)),
+      { spec: z.string().describe('markdown spec: goal, approach, how it is verified'), items: z.array(planItem), branch_type: branchType },
+      wrap(({ spec, items, branch_type }) => host.startWork(spec, items, branch_type)),
     ),
     tool(
       'approve_plan',

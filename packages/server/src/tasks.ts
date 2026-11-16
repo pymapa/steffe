@@ -13,7 +13,7 @@ import type {
   WorkItem,
   WorkItemStatus,
 } from '@steffe/shared';
-import { steffeServer, type PlanItemInput, type ToolHost } from './agentTools.js';
+import { steffeServer, type BranchType, type PlanItemInput, type ToolHost } from './agentTools.js';
 import {
   addWorktree,
   commitsAhead,
@@ -206,8 +206,8 @@ export class TaskManager {
     const id = randomUUID();
     const title = (req.title?.trim() || req.prompt.split('\n')[0]).slice(0, 80);
     const baseBranch = await defaultBaseBranch(project.path);
-    // Only the name: the branch and its worktree are created when the orchestrator starts work.
-    const branch = `steffe/${slugify(title)}-${id.slice(0, 6)}`;
+    // A provisional name: the orchestrator picks the type and the branch is created when work starts.
+    const branch = `feature/${slugify(title)}`;
 
     const task: Task = {
       id,
@@ -249,11 +249,21 @@ export class TaskManager {
     return task;
   }
 
-  /** Create the task branch and worktree the first time work starts. */
-  private async ensureWorktree(task: Task): Promise<string> {
+  /** Create the task branch (<type>/<slug>, made unique) and its worktree the first time work starts. */
+  private async ensureWorktree(task: Task, type: BranchType): Promise<string> {
     if (task.worktreePath) return task.worktreePath;
     const project = this.project(task);
     const path = join(WORKTREES_DIR, task.id, 'task');
+    // "Fix login" -> fix/login, not fix/fix-login.
+    const slug = slugify(task.title);
+    const name = `${type}/${slug.startsWith(`${type}-`) ? slug.slice(type.length + 1) : slug}`;
+    const taken = async (b: string) =>
+      [...this.tasks.values()].some((t) => t !== task && t.branch === b) ||
+      (await tryGit(project.path, 'rev-parse', '--verify', '--quiet', `refs/heads/${b}`)).ok ||
+      (await tryGit(project.path, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${b}`)).ok;
+    let branch = name;
+    for (let n = 2; await taken(branch); n++) branch = `${name}-${n}`;
+    task.branch = branch;
     await addWorktree(project.path, path, task.branch, await startPoint(project.path, task.baseBranch));
     task.worktreePath = path;
     return path;
@@ -789,16 +799,16 @@ export class TaskManager {
           this.setPlan(t, spec, items);
           return `Plan updated: ${items.length} items. The user sees it on the board and approves it in the UI.`;
         }),
-      startPlanning: (brief) => run((t) => this.startPlanning(t, brief)),
+      startPlanning: (brief, type) => run((t) => this.startPlanning(t, brief, type)),
       approvePlan: () =>
         run(async (t) => `Plan approved; the task is now executing. Execute it:\n\n${await this.approvePlan(t)}`),
       addItems: (items) => run((t) => this.addItems(t, items)),
-      startWork: (spec, items) =>
+      startWork: (spec, items, type) =>
         run(async (t) => {
           if (t.phase !== 'triage') throw new Error(`start_work is a triage decision; the task is ${t.phase}`);
           if (!items.length) throw new Error('the plan needs at least one work item');
           this.setPlan(t, spec, items);
-          const wt = await this.ensureWorktree(t);
+          const wt = await this.ensureWorktree(t, type);
           t.phase = 'executing';
           return `Plan set with ${items.length} item(s) and the task worktree created at ${wt} on ${t.branch}; the task is now executing. Spawn the developer(s) now.`;
         }),
@@ -883,9 +893,9 @@ export class TaskManager {
     };
   }
 
-  private async startPlanning(task: Task, brief: string): Promise<string> {
+  private async startPlanning(task: Task, brief: string, type: BranchType): Promise<string> {
     if (task.phase !== 'triage') throw new Error(`start_planning is a triage decision; the task is ${task.phase}`);
-    const cwd = await this.ensureWorktree(task);
+    const cwd = await this.ensureWorktree(task, type);
     task.phase = 'planning';
     await this.startAgent(task, 'planner', {
       cwd,

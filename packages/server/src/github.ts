@@ -115,7 +115,7 @@ export async function getPullRequest(
 const FIELDS =
   'number,title,url,state,isDraft,headRefName,baseRefName,author,statusCheckRollup,reviewDecision,mergeable,updatedAt';
 
-/** Open PRs (plus recently closed/merged ones from Steffe branches) for the repo at `cwd`. */
+/** Open PRs (plus recently closed/merged ones from Steffe task branches) for the repo at `cwd`. */
 export async function listPullRequests(
   cwd: string,
   taskForBranch: (branch: string) => string | null,
@@ -124,9 +124,11 @@ export async function listPullRequests(
   try {
     raw = JSON.parse(await gh(cwd, 'pr', 'list', '--state', 'open', '--limit', '50', '--json', FIELDS)) as RawPr[];
     const recent = JSON.parse(
-      await gh(cwd, 'pr', 'list', '--state', 'all', '--search', 'head:steffe/', '--limit', '20', '--json', FIELDS),
+      await gh(cwd, 'pr', 'list', '--state', 'all', '--limit', '30', '--json', FIELDS),
     ) as RawPr[];
-    for (const pr of recent) if (!raw.some((r) => r.number === pr.number)) raw.push(pr);
+    for (const pr of recent) {
+      if (taskForBranch(pr.headRefName) && !raw.some((r) => r.number === pr.number)) raw.push(pr);
+    }
   } catch (err) {
     const e = err as { stderr?: string; code?: string; message: string };
     const reason = e.code === 'ENOENT' ? 'GitHub CLI (gh) is not installed' : (e.stderr || e.message).trim();
