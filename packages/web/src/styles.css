@@ -112,7 +112,13 @@ label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); fo
 .permission { margin-top: 14px; border: 1px solid var(--warn); border-radius: 8px; padding: 12px; background: rgba(224,175,104,.08); display: flex; flex-direction: column; gap: 10px; }
 
 .composer { border-top: 1px solid var(--border); padding: 12px 20px; display: flex; gap: 10px; align-items: flex-end; background: var(--bg-2); }
-.composer textarea { flex: 1; }
+.composer textarea { flex: 1; width: 100%; box-sizing: border-box; }
+.composer.dragging { outline: 2px dashed var(--accent, #888); outline-offset: -6px; }
+.composer-input { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.composer-attachments { display: flex; gap: 8px; overflow-x: auto; }
+.composer-attachment { position: relative; flex: none; }
+.composer-attachment img { display: block; height: 64px; max-width: 160px; object-fit: cover; border: 1px solid var(--border); border-radius: 4px; }
+.composer-attachment button { position: absolute; top: 2px; right: 2px; padding: 0 5px; line-height: 16px; font-size: 13px; border-radius: 8px; }
 
 /* directory picker */
 .input-row { display: flex; gap: 8px; }
@@ -422,3 +428,12 @@ button.danger-solid:hover { filter: brightness(1.1); border-color: var(--bad); }
 .resize-handle.at-md { left: calc(20px + (100% - 56px) * var(--md-source, 50) / 100 + 8px); }
 body.resizing { cursor: col-resize; user-select: none; }
 body.resizing iframe { pointer-events: none; }
+/* agent tabs grouped by role: a dropdown per role */
+.agent-tabs .agent-group-toggle .chevron { font-size: 10px; opacity: .7; }
+.agent-menu { position: fixed; z-index: 50; min-width: 200px; max-width: 320px; max-height: 60vh; overflow-y: auto; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 10px 30px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 1px; }
+.agent-menu-title { font-size: 11px; color: var(--muted); padding: 4px 8px 2px; text-transform: uppercase; letter-spacing: .04em; }
+.agent-menu button { background: none; border: none; border-radius: 5px; padding: 5px 8px; display: flex; align-items: center; gap: 6px; text-align: left; color: var(--fg); white-space: nowrap; }
+.agent-menu button:hover { background: var(--bg-3); }
+.agent-menu button.active { background: var(--bg-3); font-weight: 600; }
+.agent-menu-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.agent-menu .mono { font-family: var(--mono); font-size: 11px; }

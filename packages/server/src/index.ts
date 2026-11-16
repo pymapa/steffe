@@ -12,6 +12,7 @@ import type {
   CreateProjectRequest,
   CreateTaskRequest,
   CreateSessionRequest,
+  ImageAttachment,
   SendMessageRequest,
   ServerEvent,
 } from '@steffe/shared';
@@ -134,6 +135,22 @@ app.get('/api/projects/:id/prs/:number', async (c) => {
 
 // --- tasks -------------------------------------------------------------------
 
+const ATTACHMENT_TYPES = new Set<ImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+/** The API's per-image limit is 5 MB (of base64). */
+const MAX_IMAGE_BASE64 = 5 * 1024 * 1024;
+
+/** Validate message attachments. They are forwarded to the session as is, never written anywhere. */
+function parseImages(raw: unknown): ImageAttachment[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw new Error('images must be an array');
+  return raw.map((img: Partial<ImageAttachment>, i) => {
+    if (!img || !ATTACHMENT_TYPES.has(img.mediaType!)) throw new Error(`image ${i + 1}: unsupported type ${img?.mediaType}`);
+    if (typeof img.data !== 'string' || !img.data) throw new Error(`image ${i + 1}: no data`);
+    if (img.data.length > MAX_IMAGE_BASE64) throw new Error(`image ${i + 1} is too large (max 5 MB)`);
+    return { mediaType: img.mediaType!, data: img.data, name: String(img.name || `image ${i + 1}`).slice(0, 120) };
+  });
+}
+
 const taskAction =
   (fn: (id: string, body: unknown) => Promise<unknown>) =>
   async (c: import('hono').Context) => {
@@ -152,9 +169,12 @@ app.get('/api/roles', async (c) => c.json([...(await loadRoles()).values()].map(
 
 app.post('/api/tasks', async (c) => {
   const body = (await c.req.json()) as CreateTaskRequest;
-  if (!body.projectId || !body.prompt?.trim()) return c.json({ error: 'projectId and prompt are required' }, 400);
   try {
-    const task = await tasks.create(body);
+    const images = parseImages(body.images);
+    if (!body.projectId || (!body.prompt?.trim() && !images.length)) {
+      return c.json({ error: 'projectId and a prompt or an image are required' }, 400);
+    }
+    const task = await tasks.create({ ...body, prompt: body.prompt?.trim() ?? '', images });
     const touched = await projects.touch(body.projectId);
     if (touched) manager.broadcast({ type: 'project.updated', project: touched });
     return c.json(task, 201);
@@ -210,9 +230,11 @@ app.post('/api/tasks/:id/handoff', taskAction((id) => tasks.handoff(id)));
 app.post(
   '/api/tasks/:id/message',
   taskAction((id, body) => {
-    const text = (body as TaskMessageRequest).text?.trim();
-    if (!text) throw new Error('text is required');
-    return tasks.message(id, text);
+    const req = body as TaskMessageRequest;
+    const text = req.text?.trim() ?? '';
+    const images = parseImages(req.images);
+    if (!text && !images.length) throw new Error('text or an image is required');
+    return tasks.message(id, text, images);
   }),
 );
 app.post(
@@ -252,9 +274,10 @@ app.post('/api/sessions/:id/messages', async (c) => {
   const s = manager.get(c.req.param('id'));
   if (!s) return c.json({ error: 'not found' }, 404);
   const body = (await c.req.json()) as SendMessageRequest;
-  if (!body.prompt) return c.json({ error: 'prompt is required' }, 400);
   try {
-    s.send(body.prompt);
+    const images = parseImages(body.images);
+    if (!body.prompt && !images.length) return c.json({ error: 'prompt or an image is required' }, 400);
+    s.send(body.prompt ?? '', images);
     return c.body(null, 204);
   } catch (err) {
     return c.json({ error: String(err) }, 409);

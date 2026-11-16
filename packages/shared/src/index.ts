@@ -82,6 +82,18 @@ export interface CreateSessionRequest {
 /** Request body for POST /api/sessions/:id/messages */
 export interface SendMessageRequest {
   prompt: string;
+  images?: ImageAttachment[];
+}
+
+/**
+ * An image (e.g. a pasted screenshot) sent along with a message. It is passed
+ * straight to the Claude session and not stored by Steffe.
+ */
+export interface ImageAttachment {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  /** Base64, without the data: URL prefix. */
+  data: string;
+  name: string;
 }
 
 /** A session discovered on disk (~/.claude/projects) that isn't currently live. */
@@ -272,11 +284,14 @@ export interface CreateTaskRequest {
   projectId: string;
   prompt: string;
   title?: string;
+  /** Sent to the orchestrator with the first message; not stored. */
+  images?: ImageAttachment[];
 }
 
 /** Request body for POST /api/tasks/:id/message: the user writes to the orchestrator (restarted if it was stopped). */
 export interface TaskMessageRequest {
   text: string;
+  images?: ImageAttachment[];
 }
 
 /** Request body for POST /api/tasks/:id/answer */

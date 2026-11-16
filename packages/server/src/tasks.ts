@@ -5,6 +5,7 @@ import { DATA_DIR } from './dataDir.js';
 import { writeFileAtomic } from './atomicWrite.js';
 import type {
   CreateTaskRequest,
+  ImageAttachment,
   Project,
   ServerEvent,
   Task,
@@ -83,7 +84,7 @@ const newItem = (i: PlanItemInput): WorkItem => ({
 /**
  * Owns Tasks: persistence, git worktrees, and the agents (ManagedSessions)
  * working on them. The orchestrator is the hub and the user's interface: it
- * triages each new request (planner first, or straight to a developer), and
+ * triages each new request (straight to a developer by default; a planner or designer only on request), and
  * every subagent report is delivered to it as a new user message.
  */
 export class TaskManager {
@@ -204,7 +205,7 @@ export class TaskManager {
     if (!project) throw new Error('project not found');
     if (!(await isGitRepo(project.path))) throw new Error('tasks need a git repository');
     const id = randomUUID();
-    const title = (req.title?.trim() || req.prompt.split('\n')[0]).slice(0, 80);
+    const title = (req.title?.trim() || req.prompt.split('\n')[0] || 'Screenshot').slice(0, 80);
     const baseBranch = await defaultBaseBranch(project.path);
     // A provisional name: the orchestrator picks the type and the branch is created when work starts.
     const branch = `feature/${slugify(title)}`;
@@ -234,23 +235,25 @@ export class TaskManager {
     this.tasks.set(id, task);
     await this.persist(task);
     const prompt = [
-      `[steffe] New message from the user. If it is a question or a request to look into something, answer it in chat: you are in the user's main checkout, read only, and no worktree exists yet. If it asks for changes, triage it: hand it to a planner (start_planning) or, if it is trivial, set a small plan and go straight to a developer (start_work). Either one creates the task branch and worktree.`,
+      `[steffe] New message from the user. If it is a question or a request to look into something, answer it in chat: you are in the user's main checkout, read only, and no worktree exists yet. If it asks for changes, write the plan yourself and go straight to a developer (start_work). Use a planner (start_planning) or a designer only when the user asks for one; if the task would greatly benefit from one, suggest it in chat and wait for the answer. start_work and start_planning create the task branch and worktree.`,
       ``,
       `# Task: ${title}`,
       ``,
       `## Request`,
-      req.prompt,
+      req.prompt || '(see the attached image)',
       ``,
       await this.rolesText(),
     ].join('\n');
-    await this.startAgent(task, 'orchestrator', { cwd: project.path, itemId: null, prompt });
+    await this.startAgent(task, 'orchestrator', { cwd: project.path, itemId: null, prompt, images: req.images });
     this.changed(task);
     return task;
   }
 
   /**
    * Create the task worktree: on first start also name the branch (<type>/<slug>, made unique).
-   * A reopened task gets its existing branch back, taking it from the main checkout after a handoff.
+   * A reopened task gets its existing branch back. After a handoff, while the user's main checkout
+   * is still on the task branch, the task works there directly (no worktree, no checkout) so the
+   * user sees the changes immediately.
    */
   private async ensureWorktree(task: Task, type: BranchType): Promise<string> {
     if (task.worktreePath) return task.worktreePath;
@@ -258,15 +261,8 @@ export class TaskManager {
     const path = join(WORKTREES_DIR, task.id, 'task');
     if (task.phase !== 'triage') {
       if (task.handedOff) {
-        const current = await tryGit(project.path, 'symbolic-ref', '--short', 'HEAD');
-        if (current.ok && current.out === task.branch) {
-          const dirty = await tryGit(project.path, 'status', '--porcelain', '--untracked-files=no');
-          if (dirty.out) {
-            throw new Error(`${task.branch} is checked out in the user's main checkout with uncommitted changes. Ask the user to commit or stash them, then retry:\n${dirty.out}`);
-          }
-          const back = await tryGit(project.path, 'checkout', task.baseBranch);
-          if (!back.ok) throw new Error(`could not switch the main checkout back to ${task.baseBranch}: ${back.out}`);
-        }
+        if (await this.mainOnTaskBranch(task)) return project.path;
+        // The user has moved their checkout elsewhere: leave it alone and use a worktree.
         task.handedOff = null;
       }
       await addWorktree(project.path, path, task.branch, task.branch);
@@ -288,7 +284,14 @@ export class TaskManager {
     return path;
   }
 
+  private async mainOnTaskBranch(task: Task): Promise<boolean> {
+    const current = await tryGit(this.project(task).path, 'symbolic-ref', '--short', 'HEAD');
+    return current.ok && current.out === task.branch;
+  }
+
+  /** Where the task branch is checked out: its worktree, or the user's main checkout after a handoff. */
   private worktree(task: Task): string {
+    if (!task.worktreePath && task.handedOff === task.branch) return this.project(task).path;
     if (!task.worktreePath) throw new Error('no work has started on this task (start_planning or start_work creates its worktree)');
     return task.worktreePath;
   }
@@ -375,29 +378,30 @@ export class TaskManager {
    * The user writes to the orchestrator. Works in any phase but paused: a stopped orchestrator
    * (finished or cancelled task, or after a restart) is resumed with the message.
    */
-  async message(id: string, text: string): Promise<Task> {
+  async message(id: string, text: string, images: ImageAttachment[] = []): Promise<Task> {
     const task = this.must(id);
     if (task.phase === 'paused') throw new Error('the task is paused: resume it first');
     const orch = task.agents.find((a) => a.role === 'orchestrator');
     if (!orch) throw new Error('this task has no orchestrator');
     const live = this.live.get(task.id)?.get(orch.name);
     if (live && live.status !== 'ended' && live.status !== 'error') {
-      live.send(text);
+      live.send(text, images);
     } else {
       const ended = !LIVE_PHASES.includes(task.phase);
       const notes = ended
         ? [
             `[steffe] The task is ${task.phase}${task.handedOff ? ` and handed off: the user's main checkout is on ${task.handedOff} and the task worktree is gone` : ''}. No other agents are running. The user is writing to you again: answer in chat.${
               task.phase === 'review' || task.phase === 'done'
-                ? ' If they want changes, add_items with the fix(es): that reopens the task (and takes the branch back from their checkout after a handoff); then dispatch, validate, merge and finish as usual, which updates the same PR.'
+                ? ' If they want changes, add_items with the fix(es): that reopens the task (after a handoff the work happens right in their main checkout, so they see it immediately); then dispatch, validate, merge and finish as usual, which updates the same PR.'
                 : ''
             }`,
             ...task.inbox.splice(0),
           ]
         : [];
       const body = [...notes, notes.length ? `The user's message:\n\n${text}` : text].join('\n\n---\n\n');
-      await this.restartAgent(task, orch, body);
-      if (!orch.claudeSessionId) this.live.get(task.id)?.get(orch.name)?.send(body);
+      // Restart idle (or from its brief), then send: images can't ride on the initial prompt.
+      await this.restartAgent(task, orch, null);
+      this.live.get(task.id)?.get(orch.name)?.send(body, images);
     }
     this.changed(task);
     return task;
@@ -592,7 +596,7 @@ export class TaskManager {
   private async startAgent(
     task: Task,
     roleName: string,
-    opts: { cwd: string; itemId: string | null; prompt: string },
+    opts: { cwd: string; itemId: string | null; prompt: string; images?: ImageAttachment[] },
   ): Promise<TaskAgent> {
     const role = await getRole(roleName);
     const existing = SINGLETON_ROLES.has(roleName) ? task.agents.find((a) => a.name === roleName) : undefined;
@@ -612,7 +616,7 @@ export class TaskManager {
       costUsd: 0,
     };
     if (!existing) task.agents.push(agent);
-    await this.launch(task, agent, { prompt: opts.prompt, resume: null });
+    await this.launch(task, agent, { prompt: opts.prompt, resume: null, images: opts.images });
     return agent;
   }
 
@@ -625,7 +629,12 @@ export class TaskManager {
     }
   }
 
-  private async launch(task: Task, agent: TaskAgent, opts: { prompt: string; resume: string | null }): Promise<void> {
+  /** Images ride along with the first prompt only; they are not kept (a restart from the brief goes without them). */
+  private async launch(
+    task: Task,
+    agent: TaskAgent,
+    opts: { prompt: string; resume: string | null; images?: ImageAttachment[] },
+  ): Promise<void> {
     const role = await getRole(agent.role);
     const project = this.project(task);
     const old = this.sessions.get(agent.sessionId);
@@ -647,7 +656,9 @@ export class TaskManager {
       `- Task branch: ${task.branch} (base: ${task.baseBranch})${item?.branch ? `; your item branch: ${item.branch}` : ''}`,
       `- Task worktree: ${task.worktreePath ?? 'none yet (start_planning or start_work creates it)'}`,
       agent.port != null ? `- Your private port: ${agent.port} (env PORT; ${agent.port + 1}-${agent.port + 9} are yours too)` : '',
-      agent.cwd === project.path
+      agent.cwd === project.path && task.handedOff && role.writable === 'cwd'
+        ? `- Your working directory is the user's main checkout, on the task branch (handed off for testing): work and commit here directly. Never switch branches, stash, reset, or discard changes you didn't make.`
+        : agent.cwd === project.path
         ? `- Your working directory is the user's main checkout: read only. Don't edit it, switch branches, run the app from it, or touch anything running from it.`
         : `- The user's main checkout at ${project.path} is off-limits: don't edit it, run things from it, or touch anything running from it.`,
       `- Files to hand over (screenshots): ${artifacts} (env STEFFE_ARTIFACTS). Playwright screenshots are saved there.`,
@@ -660,7 +671,8 @@ export class TaskManager {
     const session = this.sessions.create(
       {
         projectId: task.projectId,
-        prompt: opts.prompt,
+        // With images, the prompt is sent below: the initial prompt can only be text.
+        prompt: opts.images?.length ? '' : opts.prompt,
         // STEFFE_FORCE_MODEL (e.g. haiku) overrides every role, for cheap smoke tests.
         model: process.env.STEFFE_FORCE_MODEL || role.model,
         permissionMode: 'default',
@@ -689,6 +701,7 @@ export class TaskManager {
         onExit: (s) => this.onExit(task.id, agent.name, s),
       },
     );
+    if (opts.images?.length) session.send(opts.prompt, opts.images);
     agent.sessionId = session.id;
     agent.state = 'active';
     let live = this.live.get(task.id);
@@ -976,13 +989,16 @@ export class TaskManager {
     }
     let note = '';
     if (reopen) {
-      const tookBack = task.handedOff;
       const wt = await this.ensureWorktree(task, 'feature');
       task.phase = 'executing';
       task.question = null;
-      note = ` The task is reopened and executing again in ${wt} on ${task.branch}${tookBack ? ` (the user's main checkout was switched back to ${task.baseBranch}; tell them)` : ''}. Validate and merge as usual, then finish again: it pushes and updates the existing PR.`;
+      note = task.handedOff
+        ? ` The task is reopened and executing again in the user's main checkout (${wt}) on ${task.branch}, so they see the changes as they land. The new items work there directly (shared, no item worktrees); never switch that checkout's branch. Validate as usual, then finish again: it pushes and updates the existing PR.`
+        : ` The task is reopened and executing again in ${wt} on ${task.branch}. Validate and merge as usual, then finish again: it pushes and updates the existing PR.`;
     }
-    task.plan.items.push(...items.map(newItem));
+    const added = items.map(newItem);
+    if (task.handedOff) for (const i of added) if (i.kind !== 'design') i.mode = 'shared';
+    task.plan.items.push(...added);
     return `Added ${items.map((i) => i.id).join(', ')} to the plan.${note} Dispatch them as usual.`;
   }
 
@@ -1007,7 +1023,9 @@ export class TaskManager {
     const project = this.project(task);
 
     let cwd = this.worktree(task);
-    if (item && role.writable === 'cwd' && item.mode === 'worktree' && !item.worktreePath) {
+    // After a handoff code happens in the user's main checkout: no item worktrees (mocks still get one).
+    const ownWorktree = item?.mode === 'worktree' && (!task.handedOff || item.kind === 'design');
+    if (item && role.writable === 'cwd' && ownWorktree && !item.worktreePath) {
       item.branch = `${task.branch}--${item.id}`;
       item.worktreePath = join(WORKTREES_DIR, task.id, 'items', item.id);
       await addWorktree(project.path, item.worktreePath, item.branch, task.branch);

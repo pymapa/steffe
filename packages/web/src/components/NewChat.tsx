@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Project, Task } from '@steffe/shared';
 import { api } from '../lib/api';
+import { Composer } from './SessionView';
 
 interface Props {
   project: Project;
@@ -9,22 +10,7 @@ interface Props {
 
 /** An empty chat with the orchestrator. The first message starts the task; its worktree comes once work starts. */
 export function NewChat({ project, onCreated }: Props) {
-  const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const send = async () => {
-    const prompt = draft.trim();
-    if (!prompt || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      onCreated(await api.createTask({ projectId: project.id, prompt }));
-    } catch (e) {
-      setError(String(e));
-      setBusy(false);
-    }
-  };
 
   return (
     <div className="session-view">
@@ -39,22 +25,18 @@ export function NewChat({ project, onCreated }: Props) {
           {busy ? 'Starting the orchestrator…' : 'Ask the orchestrator something, or tell it what you want done.'}
         </p>
       </div>
-      <footer className="composer">
-        {error && <div className="error">{error}</div>}
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter sends; Shift+Enter is a new line. Ignore Enter that confirms an IME composition.
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
-          }}
-          placeholder="Send a message… (Enter to send, Shift+Enter for a new line)"
-          disabled={busy}
-          rows={3}
-          autoFocus
-        />
-        <button className="primary" onClick={send} disabled={busy || !draft.trim()}>Send</button>
-      </footer>
+      <Composer
+        autoFocus
+        disabledReason={null}
+        onSend={async (prompt, images) => {
+          setBusy(true);
+          try {
+            onCreated(await api.createTask({ projectId: project.id, prompt, images }));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      />
     </div>
   );
 }

@@ -12,6 +12,7 @@ import type {
   Task,
   TranscriptEntry,
   DirectoryListing,
+  ImageAttachment,
   Project,
   SessionDetail,
   SessionSummary,
@@ -45,10 +46,10 @@ export const api = {
   getSession: (id: string) => request<SessionDetail>(`/api/sessions/${id}`),
   createSession: (body: CreateSessionRequest) =>
     request<SessionSummary>('/api/sessions', { method: 'POST', body: JSON.stringify(body) }),
-  sendMessage: (id: string, prompt: string) =>
+  sendMessage: (id: string, prompt: string, images: ImageAttachment[] = []) =>
     request<void>(`/api/sessions/${id}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, images }),
     }),
   interrupt: (id: string) => request<void>(`/api/sessions/${id}/interrupt`, { method: 'POST' }),
   close: (id: string) => request<void>(`/api/sessions/${id}`, { method: 'DELETE' }),
@@ -65,8 +66,8 @@ export const api = {
   pauseTask: (id: string) => request<Task>(`/api/tasks/${id}/pause`, { method: 'POST' }),
   resumeTask: (id: string) => request<Task>(`/api/tasks/${id}/resume`, { method: 'POST' }),
   cancelTask: (id: string) => request<Task>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
-  messageTask: (id: string, text: string) =>
-    request<Task>(`/api/tasks/${id}/message`, { method: 'POST', body: JSON.stringify({ text }) }),
+  messageTask: (id: string, text: string, images: ImageAttachment[] = []) =>
+    request<Task>(`/api/tasks/${id}/message`, { method: 'POST', body: JSON.stringify({ text, images }) }),
   completeTask: (id: string) => request<Task>(`/api/tasks/${id}/complete`, { method: 'POST' }),
   handoffTask: (id: string) => request<Task>(`/api/tasks/${id}/handoff`, { method: 'POST' }),
   answerTask: (id: string, answer: string) =>

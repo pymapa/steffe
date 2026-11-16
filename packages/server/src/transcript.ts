@@ -11,6 +11,9 @@ function toBlocks(content: unknown): TranscriptBlock[] {
       case 'text':
         out.push({ type: 'text', text: String(block.text ?? '') });
         break;
+      case 'image':
+        out.push({ type: 'text', text: '📎 image' });
+        break;
       case 'thinking':
         if (block.thinking) out.push({ type: 'thinking', text: String(block.thinking) });
         break;

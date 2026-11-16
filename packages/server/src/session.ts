@@ -12,6 +12,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   CreateSessionRequest,
+  ImageAttachment,
   PermissionRequest,
   ServerEvent,
   SessionDetail,
@@ -156,12 +157,14 @@ export class ManagedSession {
     void this.consume();
   }
 
-  send(prompt: string): void {
+  /** Images go straight to the SDK; the transcript only notes their names. */
+  send(prompt: string, images: ImageAttachment[] = []): void {
     if (this.status === 'ended' || this.status === 'error') {
       throw new Error(`session is ${this.status}`);
     }
-    this.addEntry(localUserEntry(randomUUID(), prompt));
-    this.input.push(prompt);
+    const shown = [prompt, ...images.map((img) => `📎 ${img.name}`)].filter(Boolean).join('\n');
+    this.addEntry(localUserEntry(randomUUID(), shown));
+    this.input.push(prompt, images);
     this.setStatus('running');
   }
 

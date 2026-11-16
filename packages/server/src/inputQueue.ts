@@ -1,4 +1,5 @@
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { ImageAttachment } from '@steffe/shared';
 
 /**
  * A push-based AsyncIterable. The SDK's streaming-input mode pulls user turns
@@ -10,11 +11,21 @@ export class InputQueue implements AsyncIterable<SDKUserMessage> {
   private waiter: ((value: IteratorResult<SDKUserMessage>) => void) | null = null;
   private closed = false;
 
-  push(prompt: string): void {
+  push(prompt: string, images: ImageAttachment[] = []): void {
     if (this.closed) throw new Error('input queue is closed');
+    const content: SDKUserMessage['message']['content'] = images.length
+      ? [
+          ...images.map((img) => ({
+            type: 'image' as const,
+            source: { type: 'base64' as const, media_type: img.mediaType, data: img.data },
+          })),
+          // The API rejects empty text blocks.
+          ...(prompt ? [{ type: 'text' as const, text: prompt }] : []),
+        ]
+      : prompt;
     const msg: SDKUserMessage = {
       type: 'user',
-      message: { role: 'user', content: prompt },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
     };
     if (this.waiter) {

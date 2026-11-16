@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import type { PermissionRequest, SessionSummary, Task, TaskAgent, TranscriptEntry, WorkItem } from '@steffe/shared';
+import { useEffect, useRef, useState } from 'react';
+import type { ImageAttachment, PermissionRequest, SessionSummary, Task, TaskAgent, TranscriptEntry, WorkItem } from '@steffe/shared';
 import { api } from '../lib/api';
 import { STATUS_LABEL, taskStatus } from '../lib/taskStatus';
 import { ImageLightbox } from './ImageLightbox';
@@ -75,7 +75,7 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
   const itemBranches = items.map((i) => i.branch).filter((b): b is string => !!b);
   const live = ['triage', 'planning', 'executing', 'escalated', 'finishing'].includes(task.phase);
   // The orchestrator stays reachable after the task ends: messaging it resumes it.
-  const orchSend = (text: string) => api.messageTask(task.id, text);
+  const orchSend = (text: string, images: ImageAttachment[]) => api.messageTask(task.id, text, images);
   const orchDisabled = task.phase === 'paused' ? 'The task is paused: resume it to continue' : null;
   const canHandoff = !live && task.phase !== 'paused' && !!task.worktreePath;
   const handoff = () =>
@@ -83,6 +83,16 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
       `Hand off "${task.title}"?\n\nThe task's worktrees are removed (agents' running apps are stopped) and ${task.branch} is checked out in your main checkout. Both must have no uncommitted changes.`,
     ) && act(() => api.handoffTask(task.id));
   const agentPerms = (a: TaskAgent) => permissions.filter((p) => p.sessionId === a.sessionId).length;
+
+  const agentBadges = (a: TaskAgent) => (
+    <>
+      {agentPerms(a) > 0 && <span className="badge warn">?</span>}
+      {a.pendingQuestion && (
+        <span className="badge" title={`Waiting for the orchestrator: ${a.pendingQuestion}`}>Q</span>
+      )}
+    </>
+  );
+  const agentTitle = (a: TaskAgent) => `${a.role}${a.itemId ? ` · ${a.itemId}` : ''} · ${a.cwd}`;
 
   return (
     <div className="task-view">
@@ -232,7 +242,7 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
               items.length === 0 ? (
                 <div className="muted pad">
                   {task.phase === 'triage'
-                    ? 'No plan yet. The orchestrator on the right is sizing up the request: it starts a planner, or goes straight to a designer or developer when that is enough.'
+                    ? 'No plan yet. The orchestrator on the right is sizing up the request: it plans the work and starts a developer (or a planner or designer, if you ask for one).'
                     : 'No plan yet. The planner is drafting it; the orchestrator on the right relays its questions to you, and the board fills in as the plan takes shape.'}
                 </div>
               ) : (
@@ -266,17 +276,20 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
         </section>
         <section className="task-right">
           <nav className="tabs agent-tabs">
-            {task.agents.map((a) => (
-              <button key={a.name} className={a.name === agent?.name ? 'active' : ''} onClick={() => setAgentName(a.name)}
-                title={`${a.role}${a.itemId ? ` · ${a.itemId}` : ''} · ${a.cwd}`}>
-                <span className={`status ${agentDot(a, sessions)}`} />
-                {a.name}
-                {agentPerms(a) > 0 && <span className="badge warn">?</span>}
-                {a.pendingQuestion && (
-                  <span className="badge" title={`Waiting for the orchestrator: ${a.pendingQuestion}`}>Q</span>
-                )}
-              </button>
-            ))}
+            {agentGroups(task.agents).map(({ role, agents }) =>
+              agents.length === 1 ? (
+                <button key={role} className={agents[0].name === agent?.name ? 'active' : ''}
+                  onClick={() => setAgentName(agents[0].name)} title={agentTitle(agents[0])}>
+                  <span className={`status ${agentDot(agents[0], sessions)}`} />
+                  {agents[0].name}
+                  {agentBadges(agents[0])}
+                </button>
+              ) : (
+                <AgentGroupMenu key={role} role={role} agents={agents} sessions={sessions} active={agent?.name}
+                  onSelect={setAgentName} perms={agents.reduce((n, a) => n + agentPerms(a), 0)}
+                  badges={agentBadges} title={agentTitle} />
+              ),
+            )}
           </nav>
           {agent && session ? (
             <SessionView
@@ -370,6 +383,98 @@ function StoredAgent({ task, agent, composer }: { task: Task; agent: TaskAgent; 
       {composer}
     </div>
   );
+}
+
+/** A role with several agents: one tab that opens a dropdown listing them. */
+function AgentGroupMenu({ role, agents, sessions, active, onSelect, perms, badges, title }: {
+  role: string;
+  agents: TaskAgent[];
+  sessions: SessionSummary[];
+  active?: string;
+  onSelect: (name: string) => void;
+  perms: number;
+  badges: (a: TaskAgent) => React.ReactNode;
+  title: (a: TaskAgent) => string;
+}) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const current = agents.find((a) => a.name === active);
+  const questions = agents.filter((a) => a.pendingQuestion).length;
+
+  useEffect(() => {
+    if (!pos) return;
+    const close = () => setPos(null);
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!menuRef.current?.contains(t) && !buttonRef.current?.contains(t)) close();
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    const onScroll = (e: Event) => !menuRef.current?.contains(e.target as Node) && close();
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [pos]);
+
+  const toggle = () => {
+    if (pos) return setPos(null);
+    // Fixed position: the tab strip scrolls horizontally and would clip an absolute menu.
+    const r = buttonRef.current!.getBoundingClientRect();
+    setPos({ top: r.bottom + 2, left: Math.max(8, Math.min(r.left, window.innerWidth - 248)) });
+  };
+
+  return (
+    <>
+      <button ref={buttonRef} className={`agent-group-toggle${current ? ' active' : ''}`} onClick={toggle}
+        title={agents.map((a) => a.name).join(', ')}>
+        <span className={`status ${current ? agentDot(current, sessions) : groupDot(agents, sessions)}`} />
+        {current ? current.name : `${roleLabel(role)} (${agents.length})`}
+        {perms > 0 && <span className="badge warn">?</span>}
+        {questions > 0 && <span className="badge" title={`${questions} waiting for the orchestrator`}>Q</span>}
+        <span className="chevron">▾</span>
+      </button>
+      {pos && (
+        <div ref={menuRef} className="agent-menu" style={{ top: pos.top, left: pos.left }}>
+          <div className="agent-menu-title">{roleLabel(role)} ({agents.length})</div>
+          {agents.map((a) => (
+            <button key={a.name} className={a.name === active ? 'active' : ''} title={title(a)}
+              onClick={() => { onSelect(a.name); setPos(null); }}>
+              <span className={`status ${agentDot(a, sessions)}`} />
+              <span className="agent-menu-name">{a.name}</span>
+              {a.itemId && <span className="muted mono">{a.itemId}</span>}
+              {badges(a)}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Agents grouped by role, groups in order of first appearance. */
+function agentGroups(agents: TaskAgent[]): { role: string; agents: TaskAgent[] }[] {
+  const groups = new Map<string, TaskAgent[]>();
+  for (const a of agents) groups.set(a.role, [...(groups.get(a.role) ?? []), a]);
+  return [...groups].map(([role, agents]) => ({ role, agents }));
+}
+
+function roleLabel(role: string): string {
+  return `${role.charAt(0).toUpperCase()}${role.slice(1)}s`;
+}
+
+const DOT_PRIORITY = ['status-error', 'status-running', 'status-starting', 'status-idle', 'status-ended'];
+
+/** The most noteworthy state among a group's agents. */
+function groupDot(agents: TaskAgent[], sessions: SessionSummary[]): string {
+  const dots = agents.map((a) => agentDot(a, sessions));
+  return DOT_PRIORITY.find((d) => dots.includes(d)) ?? 'status-ended';
 }
 
 function agentDot(a: TaskAgent, sessions: SessionSummary[]): string {
