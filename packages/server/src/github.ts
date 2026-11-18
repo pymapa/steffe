@@ -159,10 +159,25 @@ export async function createPullRequest(
   return out.split('\n').find((l) => l.startsWith('http')) ?? out;
 }
 
-/** Close the open PR whose head is `branch`, if any. Returns its url, or null when there was none. */
-export async function closePullRequest(cwd: string, branch: string, comment: string): Promise<string | null> {
-  const url = await gh(cwd, 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '-q', '.[0].url');
-  if (!url) return null;
+/**
+ * Close the open PR whose head is `branch` (or the PR at `prUrl`, when known), if any.
+ * A merged or already closed PR is left alone. Returns the closed url, or null when nothing was open.
+ */
+export async function closePullRequest(
+  cwd: string,
+  branch: string,
+  comment: string,
+  prUrl?: string | null,
+): Promise<string | null> {
+  let url: string;
+  if (prUrl) {
+    const state = await gh(cwd, 'pr', 'view', prUrl, '--json', 'state', '-q', '.state');
+    if (state !== 'OPEN') return null;
+    url = prUrl;
+  } else {
+    url = await gh(cwd, 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '-q', '.[0].url');
+  }
+  if (!url || url === 'null') return null;
   await gh(cwd, 'pr', 'close', url, '--comment', comment);
   return url;
 }

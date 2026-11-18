@@ -598,7 +598,7 @@ export class TaskManager {
     const hasOrigin = (await tryGit(repo, 'remote', 'get-url', 'origin')).ok;
     if (hasOrigin) {
       try {
-        await closePullRequest(repo, task.branch, 'Closed by Steffe: the task was deleted.');
+        await closePullRequest(repo, task.branch, 'Closed by Steffe: the task was deleted.', task.prUrl);
       } catch (e) {
         const err = e as { stderr?: string; message: string };
         warnings.push(`closing the PR for ${task.branch} failed: ${(err.stderr || err.message).trim()}`);
