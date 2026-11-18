@@ -66,7 +66,7 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
 
   const remove = () =>
     act(async () => {
-      const { warnings } = await api.deleteTask(task.id, deleteBranches);
+      const { warnings } = await api.deleteTask(task.id, deleteBranches || task.phase === 'done');
       // The view unmounts once the task is gone, so report cleanup failures outside it.
       if (warnings.length) alert(`Task deleted, but some cleanup failed:\n\n${warnings.join('\n')}`);
     }).finally(() => setDeleting(false));
@@ -165,12 +165,18 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
             <p className="muted">
               <strong className="delete-task-title">{task.title}</strong> and its agents, transcripts and worktrees will be removed.
             </p>
-            <label className={`option-card${deleteBranches ? ' checked' : ''}`}>
-              <input type="checkbox" checked={deleteBranches} disabled={busy} onChange={(e) => setDeleteBranches(e.target.checked)} />
+            <label className={`option-card${deleteBranches || task.phase === 'done' ? ' checked' : ''}`}>
+              <input
+                type="checkbox"
+                checked={deleteBranches || task.phase === 'done'}
+                disabled={busy || task.phase === 'done'}
+                onChange={(e) => setDeleteBranches(e.target.checked)}
+              />
               <div>
                 <div className="option-title">Also delete branches{task.prUrl ? ' and close the PR' : ''}</div>
                 <div className="option-detail">
-                  {itemBranches.length ? `${itemBranches.length + 1} branches` : <span className="mono">{task.branch}</span>}, locally and on origin
+                  {itemBranches.length ? `${itemBranches.length + 1} branches` : <span className="mono">{task.branch}</span>}, locally and on origin.
+                  Your main checkout goes back to <span className="mono">{task.baseBranch}</span>, updated from origin.
                 </div>
               </div>
             </label>

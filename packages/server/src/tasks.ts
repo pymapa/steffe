@@ -561,8 +561,9 @@ export class TaskManager {
   }
 
   /**
-   * Forget a task and remove its worktrees. Branches and any PR are kept unless `deleteBranches`:
-   * then the open PR is closed and the task and item branches are deleted locally and on origin.
+   * Forget a task and remove its worktrees. Branches and any PR are kept unless `deleteBranches`
+   * or the task is done: then the open PR is closed, the task and item branches are deleted locally
+   * and on origin, and the main checkout is moved off them onto an updated base branch.
    * Returns null when the task does not exist, else the cleanup steps that failed.
    */
   async remove(id: string, opts: { deleteBranches?: boolean } = {}): Promise<{ warnings: string[] } | null> {
@@ -581,7 +582,8 @@ export class TaskManager {
       }
       if (task.worktreePath) await removeWorktree(project.path, task.worktreePath);
       // Without a worktree (or a handoff) the task branch was never created.
-      if (opts.deleteBranches && (task.worktreePath || task.handedOff)) warnings.push(...(await this.deleteBranches(project.path, task)));
+      const deleteBranches = opts.deleteBranches || task.phase === 'done';
+      if (deleteBranches && (task.worktreePath || task.handedOff)) warnings.push(...(await this.deleteBranches(project.path, task)));
     }
     await rm(join(WORKTREES_DIR, task.id), { recursive: true, force: true });
     await rm(join(TASKS_DIR, `${task.id}.json`), { force: true });
@@ -611,12 +613,33 @@ export class TaskManager {
         if (!push.ok) warnings.push(`deleting ${onRemote.join(', ')} on origin failed: ${push.out.trim()}`);
       }
     }
+    warnings.push(...(await this.backToBase(repo, task, branches, hasOrigin)));
     for (const b of branches) {
       if (!(await tryGit(repo, 'rev-parse', '--verify', `refs/heads/${b}`)).ok) continue;
       const del = await tryGit(repo, 'branch', '-D', b);
       if (!del.ok) warnings.push(`deleting local branch ${b} failed: ${del.out.trim()}`);
     }
     return warnings;
+  }
+
+  /**
+   * Before a task's branches go: if the main checkout is on one of them (after a handoff), check
+   * the base branch out instead; then fast-forward the base branch to origin. Returns what failed.
+   */
+  private async backToBase(repo: string, task: Task, branches: string[], hasOrigin: boolean): Promise<string[]> {
+    const base = task.baseBranch;
+    const head = async () => (await tryGit(repo, 'symbolic-ref', '--short', 'HEAD')).out;
+    if (branches.includes(await head())) {
+      const co = await tryGit(repo, 'checkout', base);
+      if (!co.ok) return [`checking out ${base} in ${repo} failed: ${co.out.trim()}`];
+    }
+    if (!hasOrigin) return [];
+    // On the base branch a pull updates the working tree too; elsewhere only the ref moves.
+    const update =
+      (await head()) === base
+        ? await tryGit(repo, 'pull', '--ff-only', 'origin', base)
+        : await tryGit(repo, 'fetch', 'origin', `${base}:${base}`);
+    return update.ok ? [] : [`updating ${base} from origin failed: ${update.out.trim()}`];
   }
 
   /** Shutdown: stop every agent (interrupting running turns so their cost is recorded) but keep them resumable. */
