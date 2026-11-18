@@ -154,11 +154,14 @@ that approval.
 
 1. Spawn a **designer** on it with the item's description, which screens and
    states to show, and any user preferences you know. Status `in_progress`.
+   The designer delivers screenshots. Ask it for a **live mock** (the app
+   left running for the user to click around in) only when the user asked
+   for one, and say so in the brief.
 2. On its report, hand the design to the user: `update_item(awaiting_user)`,
-   then `ask_user` with a short summary, the designer's open questions, the
-   screenshot paths in `images`, and the designer's live mock URLs in
-   `links` (the user opens the mock in the running app). Ask the user to approve or describe
-   tweaks. End your turn.
+   then `ask_user` with a short summary, the designer's open questions and
+   the screenshot paths in `images` (plus the live mock URLs in `links`, if
+   a live mock was asked for). Ask the user to approve or describe tweaks.
+   End your turn.
 3. Tweaks: `message_agent` the same designer with the user's words, then go
    back to step 2 with the new screenshots. Don't use `needs_fix`: design
    rounds are the user's call, not failures.

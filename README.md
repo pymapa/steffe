@@ -124,11 +124,12 @@ continue). The detail next to it says what's waiting.
    - A **designer** (Fable) handles `design` items, which the planner adds
      when you want to see a mock before development (or the orchestrator, for
      a trivial task you asked a mock for). It mocks the change up in the
-     project's real UI with fake data on its own branch, screenshots it, and
-     leaves the app running on its private port. The orchestrator hands you
-     the screenshots and an **Open mock** link to the live page in the task
-     view (Steffe stops that app when the designer is closed): **Approve
-     design**, or describe tweaks and the designer revises. Code items that
+     project's real UI with fake data on its own branch and screenshots it.
+     The orchestrator hands you the screenshots in the task view: **Approve
+     design**, or describe tweaks and the designer revises. Ask for a live
+     mock and the designer also leaves the app running on its private port,
+     with an **Open mock** link to the page (Steffe stops that app when the
+     designer is closed). Code items that
      depend on the design start after approval. Design items are never
      merged, the designer marks every mock change `STEFFE-MOCK`, and
      `finish` refuses to open the PR while any line the task adds carries
