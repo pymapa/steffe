@@ -5,15 +5,17 @@ import type { PermissionRequest, SessionSummary, Task } from '@steffe/shared';
  * phase and the live state of its agents:
  * - new: just created, the orchestrator is still sizing up the request
  * - working: agents are busy; nothing is needed from the user
- * - handoff: the ball is with the user (a reply, a design or plan to approve,
- *   a question, a permission, or a finished result to pick up)
+ * - waiting: an agent needs something from the user before it can go on (a
+ *   reply, a design or plan to approve, a question, a permission)
+ * - handoff: the work is finished and ready for the user to pick up and test
  * - paused: stopped; resume to continue
  */
-export type TaskStatus = 'new' | 'working' | 'handoff' | 'paused' | 'done' | 'cancelled' | 'failed';
+export type TaskStatus = 'new' | 'working' | 'waiting' | 'handoff' | 'paused' | 'done' | 'cancelled' | 'failed';
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   new: 'New',
   working: 'Working',
+  waiting: 'Waiting for you',
   handoff: 'Ready for handoff',
   paused: 'Paused',
   done: 'Done',
@@ -38,12 +40,12 @@ export function taskStatus(task: Task, sessions: SessionSummary[], permissions: 
   if (task.phase === 'cancelled') return { status: 'cancelled', detail: '' };
   if (task.phase === 'failed') return { status: 'failed', detail: task.lastError ?? '' };
   if (task.phase === 'done') return { status: 'done', detail: '' };
+  if (task.question) return { status: 'waiting', detail: task.question.images?.length ? 'design to review' : 'question for you' };
+  if (permissions.some((p) => task.agents.some((a) => a.sessionId === p.sessionId))) {
+    return { status: 'waiting', detail: 'permission needed' };
+  }
   if (task.phase === 'review' && !live(sessionOf(task, sessions))) {
     return { status: 'handoff', detail: task.handedOff ? 'checked out, ready to test' : task.prUrl ? 'pull request ready to test' : 'ready to test' };
-  }
-  if (task.question) return { status: 'handoff', detail: task.question.images?.length ? 'design to review' : 'question for you' };
-  if (permissions.some((p) => task.agents.some((a) => a.sessionId === p.sessionId))) {
-    return { status: 'handoff', detail: 'permission needed' };
   }
 
   const orch = task.agents.find((a) => a.role === 'orchestrator');
@@ -58,10 +60,10 @@ export function taskStatus(task: Task, sessions: SessionSummary[], permissions: 
     return { status: 'working', detail: names.length ? names.join(', ') : 'orchestrator' };
   }
   // The orchestrator is idle and nobody else is working.
-  if (task.phase === 'triage') return { status: 'handoff', detail: 'waiting for your reply' };
+  if (task.phase === 'triage') return { status: 'waiting', detail: 'waiting for your reply' };
   if (task.phase === 'planning') {
     const planner = task.agents.find((a) => a.role === 'planner');
-    return { status: 'handoff', detail: planner?.state === 'reported' && task.plan?.items.length ? 'plan to approve' : 'waiting for your reply' };
+    return { status: 'waiting', detail: planner?.state === 'reported' && task.plan?.items.length ? 'plan to approve' : 'waiting for your reply' };
   }
   return { status: 'working', detail: 'orchestrator' };
 }
