@@ -13,6 +13,7 @@ import type {
   TranscriptEntry,
   DirectoryListing,
   ImageAttachment,
+  OpenProjectResult,
   Project,
   SessionDetail,
   SessionSummary,
@@ -36,8 +37,12 @@ export const api = {
   // projects
   listProjects: () => request<Project[]>('/api/projects'),
   openProject: (body: CreateProjectRequest) =>
-    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
+    request<OpenProjectResult>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
   removeProject: (id: string) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }),
+  analyzeSetup: (projectId: string) => request<SessionSummary>(`/api/projects/${projectId}/setup/analyze`, { method: 'POST' }),
+  acceptSetup: (projectId: string) => request<Project>(`/api/projects/${projectId}/setup/accept`, { method: 'POST' }),
+  dismissSetup: (projectId: string) => request<Project>(`/api/projects/${projectId}/setup/dismiss`, { method: 'POST' }),
+  clearSetup: (projectId: string) => request<Project>(`/api/projects/${projectId}/setup`, { method: 'DELETE' }),
   listStoredSessions: (projectId: string) =>
     request<StoredSession[]>(`/api/projects/${projectId}/stored-sessions`),
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
-import type { CreateProjectRequest, Project } from '@steffe/shared';
+import type { CreateProjectRequest, OpenProjectResult, Project } from '@steffe/shared';
 
 import { DATA_DIR } from './dataDir.js';
 import { writeFileAtomic } from './atomicWrite.js';
@@ -35,11 +35,12 @@ export class ProjectStore {
   }
 
   /** Open a folder as a project. Re-opening an existing path returns the existing project. */
-  async open(req: CreateProjectRequest): Promise<Project> {
+  async open(req: CreateProjectRequest): Promise<OpenProjectResult> {
     const path = resolve(req.path);
     if (!(await stat(path)).isDirectory()) throw new Error(`${path} is not a directory`);
     const now = new Date().toISOString();
     let project = this.list().find((p) => p.path === path);
+    const created = !project;
     if (project) {
       project.lastOpenedAt = now;
       if (req.name) project.name = req.name;
@@ -48,7 +49,15 @@ export class ProjectStore {
       this.projects.set(project.id, project);
     }
     await this.save();
-    return project;
+    return { project, created };
+  }
+
+  async update(id: string, patch: Partial<Pick<Project, 'setup' | 'setupProposal'>>): Promise<Project> {
+    const p = this.projects.get(id);
+    if (!p) throw new Error('project not found');
+    Object.assign(p, patch);
+    await this.save();
+    return p;
   }
 
   async touch(id: string): Promise<Project | undefined> {

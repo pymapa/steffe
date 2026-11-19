@@ -36,12 +36,25 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
   const [deleting, setDeleting] = useState(false);
   const [deleteBranches, setDeleteBranches] = useState(false);
   const [lightbox, setLightbox] = useState<number | null>(null);
+  // Screenshots the user picked, e.g. one of several alternatives; named in the answer.
+  const [chosen, setChosen] = useState<string[]>([]);
   const questionImages = (task.question?.images ?? []).map((name) => ({
     name,
     src: `/api/tasks/${task.id}/artifacts/${encodeURIComponent(name)}`,
   }));
 
   useEffect(() => setAgentName(defaultAgent), [task.id, defaultAgent]);
+  useEffect(() => setChosen([]), [task.question?.id]);
+  const toggleChosen = (name: string) =>
+    setChosen((c) => (c.includes(name) ? c.filter((n) => n !== name) : [...c, name]));
+  const chosenList = chosen.map((n) => `\`${n}\``).join(', ');
+  const sendAnswer = () =>
+    act(async () => {
+      await api.answerTask(task.id, chosen.length ? `I choose the design shown in ${chosenList}.
+
+${answer}` : answer);
+      setAnswer('');
+    });
   useEffect(() => {
     if (task.report) setTab('report');
   }, [task.report]);
@@ -208,14 +221,24 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
             {questionImages.length > 0 && (
               <div className="question-images">
                 {questionImages.map((img, i) => (
-                  <button key={img.name} className="image-thumb" title={img.name} onClick={() => setLightbox(i)}>
-                    <img src={img.src} alt={img.name} />
-                  </button>
+                  <figure key={img.name} className={chosen.includes(img.name) ? 'chosen' : undefined}>
+                    <button className="image-thumb" title={img.name} onClick={() => setLightbox(i)}>
+                      <img src={img.src} alt={img.name} />
+                    </button>
+                    <figcaption>
+                      <span className="muted" title={img.name}>{img.name}</span>
+                      <button className={`small${chosen.includes(img.name) ? ' primary' : ''}`} title="Choose this design"
+                        onClick={() => toggleChosen(img.name)}>
+                        {chosen.includes(img.name) ? '✓ Chosen' : 'Choose'}
+                      </button>
+                    </figcaption>
+                  </figure>
                 ))}
               </div>
             )}
             {lightbox !== null && (
-              <ImageLightbox images={questionImages} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
+              <ImageLightbox images={questionImages} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)}
+                chosen={chosen} onToggleChosen={toggleChosen} />
             )}
           </div>
           <div className="input-row">
@@ -223,17 +246,20 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
               placeholder={task.question.images?.length ? 'Tweaks you want, or approve as is…' : 'Your answer…'}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && answer.trim()) {
-                  void act(async () => { await api.answerTask(task.id, answer); setAnswer(''); });
+                  void sendAnswer();
                 }
               }} />
             <button className="primary" disabled={busy || !answer.trim()}
-              onClick={() => act(async () => { await api.answerTask(task.id, answer); setAnswer(''); })}>
+              onClick={() => void sendAnswer()}>
               {task.question.images?.length ? 'Request tweaks' : 'Answer'}
             </button>
             {task.question.images && task.question.images.length > 0 && (
-              <button className="primary" disabled={busy || !!answer.trim()} title="Approve the design as shown"
-                onClick={() => act(() => api.answerTask(task.id, 'I approve this design as shown.'))}>
-                Approve design
+              <button className="primary" disabled={busy || !!answer.trim()}
+                title={chosen.length ? `Approve ${chosen.join(', ')} as shown` : 'Approve the design as shown'}
+                onClick={() => act(() => api.answerTask(task.id, chosen.length
+                  ? `I approve the design shown in ${chosenList}, as shown.`
+                  : 'I approve this design as shown.'))}>
+                {chosen.length ? 'Approve chosen' : 'Approve design'}
               </button>
             )}
           </div>

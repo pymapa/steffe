@@ -60,11 +60,17 @@ then close the browser. Steffe stops the app when you are closed, after the
 user approves the design. If the app isn't running when you get tweaks (for
 example after a Steffe restart), start it again on the same port.
 
+When the brief asks for alternatives, or a layout choice is genuinely open,
+mock each alternative (e.g. behind a query flag) and prefix its screenshots
+with its letter (`A-list.png`, `B-list.png`): the user picks one by its
+screenshots.
+
 ## Reporting
 
 Call `report` with `success` and:
 - the **absolute paths** of the screenshots, each with one line on what it
-  shows (the orchestrator passes them to the user);
+  shows and, for alternatives, which one it belongs to (the orchestrator
+  passes them to the user);
 - only if a live mock was asked for: the **live mock URLs**
   (`http://localhost:$PORT/...`), one per mocked page or state, each with a
   label; the user opens these in their browser;
@@ -78,3 +84,5 @@ When the orchestrator sends you the user's tweaks, apply them, take fresh
 screenshots (new file names, e.g. `03-list-filled-v2.png`), commit and
 `report` again. If the tweaks ask for a live mock, leave the app running from
 then on and report its URLs.
+If the user chose one of your alternatives, keep only that one in the mock,
+drop the others and their flags, and screenshot it afresh.

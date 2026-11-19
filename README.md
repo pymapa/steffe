@@ -118,7 +118,8 @@ continue). The detail next to it says what's waiting.
      the whole plan and answers with `message_agent`, after asking you
      (`ask_user`) if only you can decide.
    - A **reviewer** (read-only) checks code and tests against the acceptance
-     criteria.
+     criteria. It runs once, on the task branch after every item is merged;
+     its findings go back to each item's developer, and fixes are merged again.
    - A **tester** runs the app and checks it with Playwright MCP (isolated,
      headless browser).
    - A **designer** (Fable) handles `design` items, which the planner adds

@@ -28,9 +28,18 @@ used only when the user asks for one; the orchestrator may suggest one when
 the task would greatly benefit from it. Either one creates the task
 branch and worktree. Every other agent runs
 autonomously; its `report`s and `ask_orchestrator` questions are delivered to
-the orchestrator as user messages. Roles live in `roles/*.md`, shared skills in `plugin/skills/`.
+the orchestrator as user messages. A finished task keeps its worktree for
+local testing until the user clicks Handoff (`TaskManager.handoff`): the
+worktree is removed and the task branch checked out in the main checkout. Roles live in `roles/*.md`, shared skills in `plugin/skills/`.
 They stay project-agnostic; project knowledge comes from the target repo's
 CLAUDE.md and skills.
+
+Project setup (`packages/server/src/projectSetup.ts`): when a git repo is first
+opened, a `setup` agent (`roles/setup.md`, never spawned in tasks) reads the
+repo's `.claude` agents, skills and tooling and proposes, per role, which of
+them to use and how (`propose_setup`). The user discusses it in chat and
+accepts it in the UI; it is stored on the project (`setup` in projects.json)
+and each task agent gets its role's wiring appended to its system prompt.
 
 ## Conventions
 
@@ -40,7 +49,7 @@ CLAUDE.md and skills.
   runs SDK queries. Keep SDK message handling there; the rest of the server only
   sees `TranscriptEntry` / `SessionSummary`. The one exception is
   `agentTools.ts`, which declares Steffe's in-process MCP tools; their
-  behaviour lives in `TaskManager`.
+  behaviour lives in `TaskManager` (and `ProjectSetupManager` for `propose_setup`).
 - SDK types: verify against `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`
   rather than from memory; the SDK moves fast.
 - Smoke test a session change with a cheap model: `"model": "haiku"` and a

@@ -20,3 +20,7 @@ Frontmatter:
 
 The body is appended to Claude Code's default system prompt. Shared skills
 live in `../plugin/skills` and are loaded into every agent as a local plugin.
+
+`setup.md` is not a task role: it runs once per project to propose how the
+other roles should use the project's own agents and skills (see Project setup
+in the UI). The accepted wiring is appended to each role's prompt in that project.

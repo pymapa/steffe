@@ -202,6 +202,10 @@ button.small { padding: 2px 8px; font-size: 11px; }
 .lightbox-nav.prev { left: 12px; }
 .lightbox-nav.next { right: 12px; }
 .question-images img { display: block; max-height: 260px; max-width: 420px; border: 1px solid var(--border, #333); border-radius: 6px; background: #fff; }
+.question-images figure { flex: none; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.question-images figcaption { display: flex; align-items: center; gap: 8px; max-width: 420px; font-size: 12px; }
+.question-images figcaption .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.question-images figure.chosen img, .lightbox img.chosen { outline: 3px solid var(--accent); outline-offset: 2px; }
 .pill.phase-triage, .pill.phase-planning { color: var(--ok); border-color: var(--ok); }
 .pill.phase-executing, .pill.phase-finishing { color: var(--accent); border-color: var(--accent); }
 .pill.phase-escalated { color: var(--warn); border-color: var(--warn); }
@@ -437,3 +441,18 @@ body.resizing iframe { pointer-events: none; }
 .agent-menu button.active { background: var(--bg-3); font-weight: 600; }
 .agent-menu-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .agent-menu .mono { font-family: var(--mono); font-size: 11px; }
+
+/* Project setup: how Steffe roles use the project's agents and skills */
+.setup-entry { padding-top: 0; }
+.task-body.single { grid-template-columns: minmax(0, 1fr); }
+.task-body.single .task-left { border-right: none; }
+.setup-detail { max-width: 860px; }
+.setup-role { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 8px 0; background: var(--bg-2); }
+.setup-role-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.setup-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.setup-chip { font: 11px var(--mono); padding: 1px 8px; border-radius: 10px; }
+.setup-chip.chip-skill { border-color: var(--ok); }
+.setup-chip.chip-agent { border-color: var(--accent); }
+.pill.setup-new { color: var(--ok); border-color: var(--ok); }
+.pill.setup-changed { color: var(--warn); border-color: var(--warn); }
+.setup-suggestions { padding-left: 20px; }

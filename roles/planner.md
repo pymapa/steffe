@@ -77,8 +77,9 @@ out of scope, risks/open questions, and how the result will be verified
 - `dependsOn`: ids of items that must be merged first. Maximise parallelism.
 - `mode`: `worktree` (default, own branch) or `shared` (tiny follow-ups where
   isolation costs more than it saves; never two shared items in parallel).
-- `validators`: `reviewer` for every code change; add `tester` when there is
-  user-visible behaviour a browser or CLI run can verify.
+- `validators`: `reviewer` for every code change (one review covers all items
+  at the end); add `tester` when there is user-visible behaviour a browser or
+  CLI run can verify (tested per item).
 - `kind`: `code` (default) or `design`. Add a **design item** when the user
   wants to see a mock before development, or when a UI change has open visual
   questions and the user agrees a mock is worth it (recommend one in that

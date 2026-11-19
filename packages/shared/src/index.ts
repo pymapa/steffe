@@ -20,12 +20,51 @@ export interface Project {
   path: string;
   createdAt: string;
   lastOpenedAt: string;
+  /** Accepted wiring of the project's own agents and skills into Steffe roles; applied to task agents. */
+  setup?: ProjectSetup | null;
+  /** The setup agent's latest proposal, waiting for the user to accept or dismiss it. */
+  setupProposal?: ProjectSetup | null;
 }
 
 /** Request body for POST /api/projects */
 export interface CreateProjectRequest {
   path: string;
   name?: string;
+}
+
+/** Response of POST /api/projects */
+export interface OpenProjectResult {
+  project: Project;
+  /** First time this folder was opened. Steffe then starts the setup agent (git repos only). */
+  created: boolean;
+}
+
+// --- Project setup -------------------------------------------------------------
+//
+// When a project is first opened, a setup agent reads its Claude Code agents,
+// skills, commands, MCP servers and CLAUDE.md, and proposes how Steffe's roles
+// should use them. The user discusses it in chat and accepts it; from then on
+// each task agent gets its role's wiring in its system prompt.
+
+/** How one Steffe role uses the project's own agents and skills. */
+export interface RoleWiring {
+  /** Steffe role name (developer, tester, ...). */
+  role: string;
+  /** Project skills (.claude/skills) the role should use. */
+  skills: string[];
+  /** Project subagents (.claude/agents) the role should delegate to. */
+  agents: string[];
+  /** Markdown instructions for the role in this project: when and how to use them. */
+  guidance: string;
+}
+
+export interface ProjectSetup {
+  /** Markdown: what the project provides and the reasoning behind the wiring. */
+  summary: string;
+  roles: RoleWiring[];
+  /** Agents or skills the project could add so Steffe's agents work better. */
+  suggestions: string[];
+  updatedAt: string;
 }
 
 export interface SessionSummary {

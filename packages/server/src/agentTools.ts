@@ -195,3 +195,40 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
     tools: all.filter((t) => allowed.includes(t.name)),
   });
 }
+
+/** Tools of a project's setup agent. The behaviour lives in ProjectSetupManager. */
+export interface SetupHost {
+  proposeSetup(summary: string, roles: RoleWiringInput[], suggestions: string[]): Promise<string>;
+}
+
+const roleWiring = z.object({
+  role: z.string().describe('Steffe role name, e.g. "tester"'),
+  skills: z.array(z.string()).default([]).describe('names of project skills (.claude/skills) this role should use'),
+  agents: z.array(z.string()).default([]).describe('names of project subagents (.claude/agents) this role should delegate to'),
+  guidance: z
+    .string()
+    .describe('markdown instructions added to the role in this project: when and how to use the skills and agents above, and anything else role-specific'),
+});
+export type RoleWiringInput = z.infer<typeof roleWiring>;
+
+export function setupServer(host: SetupHost): McpSdkServerConfigWithInstance {
+  return createSdkMcpServer({
+    name: 'steffe',
+    version: '0.1.0',
+    tools: [
+      tool(
+        'propose_setup',
+        "Show the user your proposal for wiring the project's agents and skills into Steffe roles. Call with the full proposal every time; it replaces the previous one. The user accepts it in the UI.",
+        {
+          summary: z.string().describe('markdown: what the project provides and why you wired it this way'),
+          roles: z.array(roleWiring).describe('one entry per role that should use something; leave out roles with nothing to add'),
+          suggestions: z
+            .array(z.string())
+            .default([])
+            .describe('agents or skills the project could add so Steffe agents work better (e.g. a skill for starting the app)'),
+        },
+        wrap(({ summary, roles, suggestions }) => host.proposeSetup(summary, roles, suggestions)),
+      ),
+    ],
+  });
+}
