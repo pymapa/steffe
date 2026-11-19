@@ -1341,6 +1341,11 @@ export class TaskManager {
       throw new Error(`item ${itemId} is a worktree item; merge_item it before marking it done`);
     }
     if (note) item.notes.push({ at: now(), by, text: note });
+    // A merged item only moves on (done) or back for fixes: anything else would make it look
+    // unmerged, and finish and merge_item would then refuse it.
+    if (item.status === 'merged' && ['todo', 'in_progress', 'in_review', 'testing'].includes(status)) {
+      return `Item ${itemId} stays merged: the board tracks merges, not validation. Mark it done when it passes, or needs_fix for fixes.`;
+    }
     if (status === 'needs_fix') {
       item.attempts += 1;
       if (item.attempts >= MAX_FIX_ROUNDS) {
@@ -1368,6 +1373,11 @@ export class TaskManager {
     const dirty = await statusPorcelain(item.worktreePath);
     if (dirty) throw new Error(`the item worktree has uncommitted changes; have the developer commit them first:\n${dirty}`);
     if ((await commitsAhead(wt, task.branch, item.branch)) === 0) {
+      // Merged before and nothing new since (its status was moved off merged afterwards).
+      if (item.notes.some((n) => n.by === 'steffe' && n.text.startsWith('merged into'))) {
+        item.status = 'merged';
+        return `${item.branch} is already merged into ${task.branch}. Marked merged.`;
+      }
       throw new Error(`branch ${item.branch} has no commits that aren't on ${task.branch}`);
     }
     const res = await mergeBranch(wt, item.branch, `Merge ${item.id}: ${item.title}`);

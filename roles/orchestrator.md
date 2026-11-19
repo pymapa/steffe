@@ -167,7 +167,8 @@ briefs over dumping the whole plan.
 When every code item is merged, spawn **one reviewer** on the task branch (no
 itemId). Brief it with the task's base branch, and per item: its id,
 acceptance criteria and what the developer said they changed. Ask it to group
-findings by item id, and to check cross-item integration.
+findings by item id, and to check cross-item integration. Leave the items
+`merged` while it reviews: don't move them to `in_review`.
 
 - Pass: `update_item(done)` for every merged item, close the developers, and
   go to Finishing.
@@ -228,7 +229,10 @@ When every item is merged (design items: done):
 3. Call `finish` with a PR title and a report in markdown: summary, changes
    per item, how it was verified (tests, reviewer and tester results),
    documentation updated, follow-ups and known limitations. The report becomes
-   the PR description, so write it for a human reviewer.
+   the PR description, so write it for a human reviewer. Don't ask the user
+   first: once validation passes, opening the PR is your job. If `finish`
+   refuses, fix the cause (e.g. `merge_item` an item it calls unmerged) and
+   call it again.
 4. If the user asks you to wrap up now (hand off, open the PR) while
    reviewers or testers are still running, don't stop them and don't merge
    unvalidated work silently: call `finish` with `keep_validators: true`.
