@@ -385,18 +385,23 @@ export class TaskManager {
     const task = this.must(id);
     if (!task.question) throw new Error('no pending question');
     const q = task.question;
+    this.settleQuestion(task);
+    this.toOrchestrator(task, `[steffe] The user answered your question.\n\nQuestion: ${q.text}\n\nAnswer: ${answer}`);
+    this.changed(task);
+    return task;
+  }
+
+  /** The user weighed in on the pending question: it is no longer waiting on them. */
+  private settleQuestion(task: Task): void {
     task.question = null;
     if (task.phase === 'escalated') task.phase = 'executing';
-    // The user weighed in: blocked items get a fresh set of fix rounds.
+    // Blocked items get a fresh set of fix rounds.
     for (const item of task.plan?.items ?? []) {
       if (item.status === 'blocked') {
         item.status = 'needs_fix';
         item.attempts = 0;
       }
     }
-    this.toOrchestrator(task, `[steffe] The user answered your question.\n\nQuestion: ${q.text}\n\nAnswer: ${answer}`);
-    this.changed(task);
-    return task;
   }
 
   /**
@@ -408,6 +413,8 @@ export class TaskManager {
     if (task.phase === 'paused') throw new Error('the task is paused: resume it first');
     const orch = task.agents.find((a) => a.role === 'orchestrator');
     if (!orch) throw new Error('this task has no orchestrator');
+    // Replying in the chat answers a pending question, as the answer box would.
+    if (task.question) this.settleQuestion(task);
     const live = this.live.get(task.id)?.get(orch.name);
     if (live && live.status !== 'ended' && live.status !== 'error') {
       live.send(text, images);
