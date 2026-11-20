@@ -21,6 +21,9 @@ export function SandboxView({ project, sandbox, onFirstChoice }: Props) {
   const [listing, setListing] = useState<FlavorListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  const [email, setEmail] = useState(project.gitEmail ?? '');
+  const githubUser = project.githubUser ?? '';
   const flavor = project.isolagentFlavor ?? '';
   const unchosen = project.isolagentFlavor === undefined;
   const choose = async (value: string | null) => {
@@ -31,6 +34,12 @@ export function SandboxView({ project, sandbox, onFirstChoice }: Props) {
   useEffect(() => {
     api.listFlavors(project.id).then(setListing, (e) => setError(String(e)));
   }, [project.id]);
+
+  useEffect(() => {
+    api.listGithubAccounts().then((r) => setAccounts(r.accounts), () => setAccounts([]));
+  }, []);
+
+  useEffect(() => setEmail(project.gitEmail ?? ''), [project.id, project.gitEmail]);
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -88,6 +97,27 @@ export function SandboxView({ project, sandbox, onFirstChoice }: Props) {
               Applies to sessions started from now on. A sandbox keeps its own session history and Claude login: log in
               once with <code>isolagent run --flavor {flavor || '<flavor>'}</code> in a terminal. Tasks started before the
               project had a sandbox can't continue in it.
+            </p>
+            <label className="sandbox-flavor">
+              <span>GitHub account</span>
+              <select value={githubUser} disabled={busy}
+                onChange={(e) => act(() => api.setAccount(project.id, e.target.value || null, project.gitEmail ?? null))}>
+                <option value="">gh's active account</option>
+                {githubUser && !accounts.includes(githubUser) && <option value={githubUser}>{githubUser} (not logged in)</option>}
+                {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </label>
+            <label className="sandbox-flavor">
+              <span>Git author email</span>
+              <input type="email" value={email} placeholder="from the global git config" disabled={busy}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                onBlur={() => email.trim() !== (project.gitEmail ?? '') && act(() => api.setAccount(project.id, project.githubUser ?? null, email.trim() || null))} />
+            </label>
+            <p className="muted">
+              The account that <code>gh</code> and <code>git push</code> use in the sandbox, and that Steffe lists and
+              opens pull requests with. The email is the sandbox's commit author. A sandbox takes both when it starts:
+              restart one that has sessions running. Sessions on this machine keep your own gh and git setup.
             </p>
             {sandbox?.message && <p className={sandbox.state === 'error' ? 'error' : ''}>{sandbox.message}</p>}
             {sandbox?.warning && <p className="muted">{sandbox.warning}</p>}

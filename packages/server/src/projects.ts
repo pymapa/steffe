@@ -52,7 +52,7 @@ export class ProjectStore {
     return { project, created };
   }
 
-  async update(id: string, patch: Partial<Pick<Project, 'setup' | 'setupProposal' | 'isolagentFlavor'>>): Promise<Project> {
+  async update(id: string, patch: Partial<Pick<Project, 'setup' | 'setupProposal' | 'isolagentFlavor' | 'githubUser' | 'gitEmail'>>): Promise<Project> {
     const p = this.projects.get(id);
     if (!p) throw new Error('project not found');
     Object.assign(p, patch);

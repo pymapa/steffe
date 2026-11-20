@@ -13,6 +13,7 @@ import type {
   TranscriptEntry,
   DirectoryListing,
   FlavorListing,
+  GithubAccounts,
   ImageAttachment,
   OpenProjectResult,
   Project,
@@ -47,6 +48,9 @@ export const api = {
   listFlavors: (projectId: string) => request<FlavorListing>(`/api/isolagent/flavors?projectId=${projectId}`),
   setFlavor: (projectId: string, flavor: string | null) =>
     request<Project>(`/api/projects/${projectId}/sandbox`, { method: 'PUT', body: JSON.stringify({ flavor }) }),
+  listGithubAccounts: () => request<GithubAccounts>('/api/github/accounts'),
+  setAccount: (projectId: string, githubUser: string | null, gitEmail: string | null) =>
+    request<Project>(`/api/projects/${projectId}/account`, { method: 'PUT', body: JSON.stringify({ githubUser, gitEmail }) }),
   startSandbox: (projectId: string) => request<void>(`/api/projects/${projectId}/sandbox/start`, { method: 'POST' }),
   stopSandbox: (projectId: string) => request<void>(`/api/projects/${projectId}/sandbox/stop`, { method: 'POST' }),
   approveSandbox: (projectId: string, hash: string) =>

@@ -14,6 +14,7 @@ import type {
   CreateTaskRequest,
   CreateSessionRequest,
   ImageAttachment,
+  SetAccountRequest,
   SetFlavorRequest,
   SendMessageRequest,
   ServerEvent,
@@ -25,18 +26,19 @@ import { readFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { TaskManager, artifactsDir } from './tasks.js';
 import { readHistory } from './session.js';
-import { getPullRequest, listPullRequests } from './github.js';
+import { getPullRequest, listGithubAccounts, listPullRequests, routeGh } from './github.js';
 import { loadRoles } from './roles.js';
 import { createCatalogEntry, loadCatalog, saveCatalogEntry } from './catalog.js';
 import { findFreePort, isFreeEverywhere } from './ports.js';
 import { ProjectSetupManager } from './projectSetup.js';
 import { isGitRepo, routeGit } from './git.js';
-import { Sandboxes, listFlavors } from './isolagent.js';
+import { Sandboxes, listFlavors, projectAt } from './isolagent.js';
 
 const manager = new SessionManager();
 const projects = new ProjectStore();
 const sandboxes = new Sandboxes(projects, (event) => manager.broadcast(event));
 routeGit((cwd) => sandboxes.gitRunner(cwd));
+routeGh((cwd) => projectAt(projects, cwd)?.githubUser);
 const tasks = new TaskManager(manager, projects, sandboxes);
 const setup = new ProjectSetupManager(manager, projects, sandboxes);
 const app = new Hono();
@@ -130,6 +132,24 @@ app.put('/api/projects/:id/sandbox', async (c) => {
   if (first && !updated.setup && !updated.setupProposal && (await isGitRepo(updated.path))) {
     setup.analyze(updated.id).catch((err) => console.error(`[steffe] setup failed to start: ${String(err)}`));
   }
+  return c.json(updated);
+});
+
+app.get('/api/github/accounts', async (c) => c.json({ accounts: await listGithubAccounts() }));
+
+app.put('/api/projects/:id/account', async (c) => {
+  const project = projects.get(c.req.param('id'));
+  if (!project) return c.json({ error: 'not found' }, 404);
+  const body = (await c.req.json()) as SetAccountRequest;
+  const githubUser = body.githubUser?.trim() || null;
+  const gitEmail = body.gitEmail?.trim() || null;
+  if (githubUser === (project.githubUser ?? null) && gitEmail === (project.gitEmail ?? null)) return c.json(project);
+  const updated = await projects.update(project.id, { githubUser, gitEmail });
+  manager.broadcast({ type: 'project.updated', project: updated });
+  // A sandbox reads the account when it starts. With nothing running in it, stop it now so the
+  // next session starts it with the new one; otherwise the user restarts it.
+  const live = manager.list().some((s) => s.req.projectId === project.id && s.status !== 'ended' && s.status !== 'error');
+  if (updated.isolagentFlavor && !live) await sandboxes.stop(updated);
   return c.json(updated);
 });
 

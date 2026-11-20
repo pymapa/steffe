@@ -4,8 +4,54 @@ import type { ChecksState, PullRequestCheck, PullRequestDetail, PullRequestInfo,
 
 const exec = promisify(execFile);
 
+/** Which gh account to act as in a checkout (its project's githubUser); nothing: gh's active one. */
+let accountAt: (cwd: string) => string | null | undefined = () => null;
+
+export function routeGh(fn: (cwd: string) => string | null | undefined): void {
+  accountAt = fn;
+}
+
+const TOKEN_TTL_MS = 60_000;
+const tokens = new Map<string, { token: string; at: number }>();
+
+/** The token of one of gh's logged-in accounts, read from gh's own store. */
+export async function githubToken(user: string): Promise<string> {
+  const hit = tokens.get(user);
+  if (hit && Date.now() - hit.at < TOKEN_TTL_MS) return hit.token;
+  // Without these, gh would answer with the environment's token whatever the user.
+  const env = { ...process.env };
+  delete env.GH_TOKEN;
+  delete env.GITHUB_TOKEN;
+  let token: string;
+  try {
+    token = (await exec('gh', ['auth', 'token', '--user', user], { env })).stdout.trim();
+  } catch {
+    throw new Error(`gh has no login for ${user}: run gh auth login`);
+  }
+  tokens.set(user, { token, at: Date.now() });
+  return token;
+}
+
+/** The github.com logins gh is signed in to. */
+export async function listGithubAccounts(): Promise<string[]> {
+  let out: string;
+  try {
+    out = (await exec('gh', ['auth', 'status', '--json', 'hosts'])).stdout;
+  } catch (err) {
+    out = (err as { stdout?: string }).stdout ?? ''; // exits non-zero when one login is broken
+  }
+  try {
+    const hosts = (JSON.parse(out) as { hosts?: Record<string, { login: string; state?: string }[]> }).hosts ?? {};
+    return (hosts['github.com'] ?? []).filter((a) => a.state !== 'error').map((a) => a.login);
+  } catch {
+    return [];
+  }
+}
+
 async function gh(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await exec('gh', args, { cwd, maxBuffer: 16 * 1024 * 1024 });
+  const user = accountAt(cwd);
+  const env = user ? { ...process.env, GH_TOKEN: await githubToken(user) } : undefined;
+  const { stdout } = await exec('gh', args, { cwd, env, maxBuffer: 16 * 1024 * 1024 });
   return stdout.trim();
 }
 

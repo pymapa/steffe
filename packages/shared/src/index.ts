@@ -29,6 +29,24 @@ export interface Project {
    * Undefined until the user has chosen. A new project's setup agent waits for that choice.
    */
   isolagentFlavor?: string | null;
+  /**
+   * The `gh auth login` account the project's sandbox and Steffe's own gh calls (PRs) act as;
+   * unset: gh's active account.
+   */
+  githubUser?: string | null;
+  /** Git author email in the project's sandbox; unset: the global git config's. */
+  gitEmail?: string | null;
+}
+
+/** Response for GET /api/github/accounts: the logins gh is signed in to on github.com. */
+export interface GithubAccounts {
+  accounts: string[];
+}
+
+/** Request body for PUT /api/projects/:id/account */
+export interface SetAccountRequest {
+  githubUser: string | null;
+  gitEmail: string | null;
 }
 
 // --- isolagent sandbox ---------------------------------------------------------

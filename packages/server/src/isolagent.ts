@@ -7,6 +7,7 @@ import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sd
 import type { FlavorListing, Project, SandboxStatus, ServerEvent } from '@steffe/shared';
 import { projectWorktrees } from './dataDir.js';
 import type { GitRunner } from './git.js';
+import { githubToken } from './github.js';
 import type { ProjectStore } from './projects.js';
 import { PLUGIN_DIR } from './roles.js';
 
@@ -47,6 +48,11 @@ interface ExecError {
 export function isInside(root: string, path: string): boolean {
   const rel = relative(resolve(root), resolve(path));
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/** The project whose checkout or task worktrees cwd is in. */
+export function projectAt(projects: ProjectStore, cwd: string): Project | undefined {
+  return projects.list().find((p) => isInside(p.path, cwd) || isInside(projectWorktrees(p.id), cwd));
 }
 
 function reason(err: unknown): string {
@@ -160,7 +166,11 @@ export class Sandboxes {
     if (process.env.STEFFE_SANDBOX_MEM) args.push('--mem', process.env.STEFFE_SANDBOX_MEM);
     args.push(project.path);
     try {
-      const { stdout } = await exec(BIN, args, { maxBuffer: MAX_BUFFER });
+      // isolagent reads the account and the git author from its environment, at each start.
+      const env = { ...process.env };
+      if (project.githubUser) env.GH_TOKEN = await githubToken(project.githubUser);
+      if (project.gitEmail) env.GIT_USER_EMAIL = project.gitEmail;
+      const { stdout } = await exec(BIN, args, { maxBuffer: MAX_BUFFER, env });
       const info = JSON.parse(stdout) as { state_dir: string };
       const r: Running = { name, stateDir: info.state_dir, checkedAt: Date.now() };
       const restarted = !this.running.has(project.id);
@@ -250,9 +260,8 @@ export class Sandboxes {
   }
 
   private projectAt(cwd: string): Project | undefined {
-    return this.projects
-      .list()
-      .find((p) => p.isolagentFlavor && (isInside(p.path, cwd) || isInside(projectWorktrees(p.id), cwd)));
+    const project = projectAt(this.projects, cwd);
+    return project?.isolagentFlavor ? project : undefined;
   }
 
   /** For routeGit: git in a sandboxed project's checkouts runs in its sandbox. */
@@ -293,6 +302,8 @@ export class Sandboxes {
   }
 
   async stop(project: Project): Promise<void> {
+    // A start under way would otherwise finish after this and leave the sandbox up.
+    await this.starting.get(project.id)?.catch(() => {});
     this.running.delete(project.id);
     await exec(BIN, ['down', this.name(project)]).catch(() => {}); // not running is fine
     if (project.isolagentFlavor) this.set(project, { state: 'stopped', message: null, approval: null, warning: null });

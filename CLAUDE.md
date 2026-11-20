@@ -61,6 +61,9 @@ or CLAUDE.md note into the main checkout when the user asks it to (uncommitted).
 - A project with `isolagentFlavor` runs in an isolagent sandbox (`packages/server/src/isolagent.ts`,
   `docs/isolagent-integration.md`): its sessions, git and agent ports go through the `isolagent`
   CLI (`STEFFE_ISOLAGENT`), and paths inside are the same as on the host.
+- A project's `githubUser` / `gitEmail` (Sandbox page) are the gh login and git author of its
+  sandbox, passed to `isolagent up` as `GH_TOKEN` / `GIT_USER_EMAIL`; Steffe's own `gh` calls
+  (`github.ts`) use the same login. Sessions on the host are not affected.
 - At most `STEFFE_MAX_AGENTS` (default 4, 0 = no limit) task agents work at
   once across all tasks; further spawns are queued (`TaskAgent.state`
   `queued`) and started by `TaskManager.drain`.

@@ -35,6 +35,8 @@ names the binary).
   before keep their folder and can't run in a sandbox.
 - Ports: published per agent, and on close the app is stopped inside and the ports unpublished.
 - Session history is read from the flavor's state folder.
+- `Project.githubUser` and `Project.gitEmail`, also on the Sandbox page: `up` gets that gh login's
+  token as `GH_TOKEN` and the email as `GIT_USER_EMAIL`, and Steffe's own `gh` uses the same login.
 - UI: approve a changed `.isolagent.toml`, "image needs a build", and a warning when the image's
   Claude Code differs from the SDK's.
 
