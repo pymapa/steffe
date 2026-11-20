@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { STATUS_LABEL, taskStatus } from '../lib/taskStatus';
 import { ImageLightbox } from './ImageLightbox';
 import { Markdown } from './Markdown';
+import { RetroView } from './RetroView';
 import { Composer, SessionView } from './SessionView';
 import { Transcript } from './Transcript';
 import { useResizable } from '../lib/useResizable';
@@ -29,7 +30,7 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
   // The orchestrator is the user's only contact; every other agent runs autonomously.
   const defaultAgent = task.agents.some((a) => a.name === 'orchestrator') ? 'orchestrator' : (task.agents[0]?.name ?? 'orchestrator');
   const [agentName, setAgentName] = useState(defaultAgent);
-  const [tab, setTab] = useState<'board' | 'report'>(task.report ? 'report' : 'board');
+  const [tab, setTab] = useState<'board' | 'report' | 'retro'>(task.report ? 'report' : 'board');
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,6 +91,8 @@ ${answer}` : answer);
   // The orchestrator stays reachable after the task ends: messaging it resumes it.
   const orchSend = (text: string, images: ImageAttachment[]) => api.messageTask(task.id, text, images);
   const orchDisabled = task.phase === 'paused' ? 'The task is paused: resume it to continue' : null;
+  // A retro looks back at a round that has ended.
+  const canRetro = ['review', 'done', 'cancelled', 'failed'].includes(task.phase) && task.agents.length > 1;
   const canHandoff = !live && task.phase !== 'paused' && !!task.worktreePath;
   const handoff = () =>
     confirm(
@@ -272,6 +275,11 @@ ${answer}` : answer);
           <nav className="tabs">
             <button className={tab === 'board' ? 'active' : ''} onClick={() => setTab('board')}>Board ({items.length})</button>
             {task.report && <button className={tab === 'report' ? 'active' : ''} onClick={() => setTab('report')}>Report</button>}
+            {(task.retro || canRetro) && (
+              <button className={tab === 'retro' ? 'active' : ''} onClick={() => setTab('retro')}>
+                Retro{task.retro?.state === 'running' ? ' …' : ''}
+              </button>
+            )}
           </nav>
           <div className="tab-body">
             {tab === 'board' && (
@@ -296,6 +304,7 @@ ${answer}` : answer);
                 </div>
               )
             )}
+            {tab === 'retro' && <RetroView task={task} canRun={canRetro} />}
             {tab === 'report' && task.report && (
               <div className="pad">
                 {task.prUrl ? (

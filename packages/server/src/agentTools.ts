@@ -232,3 +232,45 @@ export function setupServer(host: SetupHost): McpSdkServerConfigWithInstance {
     ],
   });
 }
+
+/** The facilitator's tool. The behaviour lives in RetroManager. */
+export interface RetroHost {
+  saveRetro(analysis: RetroInput): Promise<string>;
+}
+
+const retroInput = z.object({
+  summary: z.string().describe('markdown, a few sentences: how the round went and the one or two things most worth changing'),
+  rating: z.enum(['smooth', 'bumpy', 'rough']).describe('smooth: nothing notable went wrong; bumpy: it got there with avoidable detours; rough: major rework, failures or waiting'),
+  went_well: z.array(z.string()).default([]).describe('what to keep doing, one line each'),
+  findings: z
+    .array(
+      z.object({
+        kind: z
+          .enum(['slow', 'failure', 'rework', 'waste', 'friction'])
+          .describe('slow: took far longer than it should; failure: something broke; rework: done twice; waste: effort that bought nothing; friction: a rule, prompt or missing setup got in the way'),
+        title: z.string().describe('one line, specific enough to recognise the same problem in another task'),
+        detail: z.string().describe('what happened, with evidence: agent, time, command, error'),
+        agent: z.string().optional().describe('agent name it happened to, e.g. developer-1'),
+        itemId: z.string().optional(),
+        minutes: z.number().optional().describe('rough time it cost'),
+        suggestion: z.string().optional().describe('the concrete change that would prevent it, and where: a Steffe role or skill, the project setup, or the project (CLAUDE.md, scripts, tests)'),
+      }),
+    )
+    .describe('most costly first; empty when the round was smooth'),
+});
+export type RetroInput = z.infer<typeof retroInput>;
+
+export function retroServer(host: RetroHost): McpSdkServerConfigWithInstance {
+  return createSdkMcpServer({
+    name: 'steffe',
+    version: '0.1.0',
+    tools: [
+      tool(
+        'save_retro',
+        'Store your retro of the task. Call exactly once, when your analysis is complete, then end your turn.',
+        retroInput.shape,
+        wrap((analysis: RetroInput) => host.saveRetro(analysis)),
+      ),
+    ],
+  });
+}

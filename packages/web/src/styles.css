@@ -217,6 +217,17 @@ button.small { padding: 2px 8px; font-size: 11px; }
 a { color: var(--accent); }
 a.link-pill { text-decoration: none; color: var(--accent); border-color: var(--accent); }
 .report-pre { margin-top: 10px; }
+.retro-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pill.retro-smooth { color: var(--ok); border-color: var(--ok); }
+.pill.retro-bumpy, .pill.retro-kind-slow, .pill.retro-kind-rework, .pill.retro-kind-waste, .pill.retro-kind-friction { color: var(--warn); border-color: var(--warn); }
+.pill.retro-rough, .pill.retro-kind-failure { color: var(--bad); border-color: var(--bad); }
+.retro-finding { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg-2); }
+.retro-finding-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.retro-suggestion { border-left: 2px solid var(--accent); padding-left: 10px; }
+.retro-table { border-collapse: collapse; font-size: 12px; }
+.retro-table th, .retro-table td { text-align: left; padding: 3px 12px 3px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.retro-table th { color: var(--muted); font-weight: normal; }
+.retro-slow { padding-left: 18px; font-size: 12px; }
 
 .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(200px, 1fr); gap: 10px; padding: 12px; align-items: start; min-width: min-content; }
 .board-col { display: flex; flex-direction: column; gap: 8px; }

@@ -43,6 +43,15 @@ and each task agent gets its role's wiring appended to its system prompt.
 The setup agent stays alive after Accept, and writes a suggested skill, agent
 or CLAUDE.md note into the main checkout when the user asks it to (uncommitted).
 
+Retros (`packages/server/src/retro.ts`): when the orchestrator has finished a
+round (`finish`, and every validator kept running past it has stopped), a
+`facilitator` agent (`roles/facilitator.md`, started by Steffe, never spawned in
+tasks, outside the agent limit) reads the agents' transcripts and Steffe's
+numbers and stores what took long, what failed and what was redone
+(`save_retro`). Records (`RetroRecord`) are JSON files in `~/.steffe/retros/`
+and outlive their task; `GET /api/retros` returns them all. `STEFFE_RETRO=off`
+leaves retros to the button on the task's Retro tab.
+
 ## Conventions
 
 - All server <-> web types live in `packages/shared/src/index.ts`. Change the
@@ -51,7 +60,8 @@ or CLAUDE.md note into the main checkout when the user asks it to (uncommitted).
   runs SDK queries. Keep SDK message handling there; the rest of the server only
   sees `TranscriptEntry` / `SessionSummary`. The one exception is
   `agentTools.ts`, which declares Steffe's in-process MCP tools; their
-  behaviour lives in `TaskManager` (and `ProjectSetupManager` for `propose_setup`).
+  behaviour lives in `TaskManager` (`ProjectSetupManager` for `propose_setup`,
+  `RetroManager` for `save_retro`).
 - SDK types: verify against `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`
   rather than from memory; the SDK moves fast.
 - Smoke test a session change with a cheap model: `"model": "haiku"` and a

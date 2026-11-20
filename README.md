@@ -174,6 +174,16 @@ and recent `steffe/*` PRs with their state (open, draft, merged, closed),
 CI status, review decision and merge conflicts, and links back to the task
 that opened each one. It uses `gh` and refreshes every minute.
 
+**Retros.** After the orchestrator finishes a round (the PR is open and every
+agent has stopped), a facilitator agent (`roles/facilitator.md`) looks back at
+it: it reads the agents' transcripts and Steffe's own numbers (time and cost
+per agent, fix rounds, failed and slow tool calls) and records what took long,
+what failed and what was redone, each with a suggested fix. The task's *Retro*
+tab shows the latest one, and can run one by hand. Every retro is kept as a
+JSON file in `~/.steffe/retros/`, also after its task is deleted, so they can
+be analysed together (`GET /api/retros`). `STEFFE_RETRO=off` turns the
+automatic retro off.
+
 Set `STEFFE_FORCE_MODEL=haiku` to run every role on a cheap model for smoke
 tests. `STEFFE_AGENT_PORT_BASE` moves the agent port range.
 

@@ -9,6 +9,7 @@ import type {
   SaveCatalogEntryRequest,
   PullRequestDetail,
   PullRequestListing,
+  RetroRecord,
   Task,
   TranscriptEntry,
   DirectoryListing,
@@ -91,6 +92,8 @@ export const api = {
     request<Task>(`/api/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
   deleteTask: (id: string, deleteBranches: boolean) =>
     request<DeleteTaskResult>(`/api/tasks/${id}${deleteBranches ? '?branches=1' : ''}`, { method: 'DELETE' }),
+  runRetro: (id: string) => request<Task>(`/api/tasks/${id}/retro`, { method: 'POST' }),
+  taskRetro: (id: string) => request<RetroRecord>(`/api/tasks/${id}/retro`),
   agentHistory: (taskId: string, name: string) =>
     request<TranscriptEntry[]>(`/api/tasks/${taskId}/agents/${encodeURIComponent(name)}/history`),
   getCatalog: (projectId: string) => request<ProjectCatalog>(`/api/projects/${projectId}/catalog`),

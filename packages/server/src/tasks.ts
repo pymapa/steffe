@@ -32,7 +32,7 @@ import {
 import { closePullRequest, createPullRequest } from './github.js';
 import { claimPort, releasePort, reservePort, stopListeners } from './ports.js';
 import type { ProjectStore } from './projects.js';
-import { PLUGIN_DIR, getRole, loadRoles } from './roles.js';
+import { FACILITATOR_ROLE, PLUGIN_DIR, getRole, loadRoles } from './roles.js';
 import { SETUP_ROLE, wiringText } from './projectSetup.js';
 import type { ManagedSession } from './session.js';
 import type { SessionManager } from './sessionManager.js';
@@ -48,6 +48,8 @@ const LIVE_PHASES: TaskPhase[] = ['triage', 'planning', 'executing', 'escalated'
 /** The PR is open; the orchestrator sleeps until the user (or a late validator report) wakes it. */
 const FINISHED_PHASES: TaskPhase[] = ['review', 'done'];
 const SINGLETON_ROLES = new Set(['planner', 'orchestrator']);
+/** Roles Steffe runs itself, outside the team: an orchestrator can't spawn them. */
+const OWN_ROLES = new Set([SETUP_ROLE, FACILITATOR_ROLE]);
 /** Roles that only check work; finish(keep_validators) lets them run on after the PR is opened. */
 const VALIDATOR_ROLES = new Set(['reviewer', 'tester']);
 /**
@@ -71,7 +73,7 @@ export const artifactsDir = (task: Pick<Task, 'id' | 'projectId'>) => join(taskD
  * A task's folder: its worktrees and artifacts. Under its project's folder, which is what a
  * sandboxed project shares into its sandbox. Tasks from before that layout keep their folder.
  */
-function taskDir(task: Pick<Task, 'id' | 'projectId'>): string {
+export function taskDir(task: Pick<Task, 'id' | 'projectId'>): string {
   const old = join(WORKTREES_DIR, task.id);
   return existsSync(old) ? old : join(projectWorktrees(task.projectId), task.id);
 }
@@ -130,6 +132,10 @@ export class TaskManager {
   private readonly saveTimers = new Map<string, NodeJS.Timeout>();
   /** Tasks whose orchestrator just called finish: it is stopped when that turn ends. Later chats keep it running. */
   private readonly finishing = new Set<string>();
+  /** Finished tasks whose retro hasn't started yet: it waits for validators kept running past finish. */
+  private readonly retroDue = new Set<string>();
+  /** Called when a finished round has wound down (every agent stopped): the retro starts here. */
+  onRoundFinished: ((task: Task) => void) | null = null;
 
   constructor(
     private readonly sessions: SessionManager,
@@ -151,6 +157,8 @@ export class TaskManager {
         const task = JSON.parse(await readFile(join(TASKS_DIR, f), 'utf8')) as Task;
         task.inbox ??= [];
         task.handedOff ??= null;
+        task.retro ??= null;
+        if (task.retro?.state === 'running') task.retro = { ...task.retro, state: 'failed', error: 'interrupted by a restart of Steffe' };
         for (const a of task.agents) {
           a.pendingQuestion ??= null;
           a.spawnedAt ??= task.createdAt;
@@ -217,6 +225,14 @@ export class TaskManager {
     return this.tasks.get(id);
   }
 
+  /** The state of the task's retro (owned by RetroManager). */
+  setRetro(id: string, retro: Task['retro']): void {
+    const task = this.tasks.get(id);
+    if (!task) return;
+    task.retro = retro;
+    this.changed(task);
+  }
+
   taskForBranch(branch: string): string | null {
     for (const t of this.tasks.values()) if (t.branch === branch) return t.id;
     return null;
@@ -264,6 +280,7 @@ export class TaskManager {
       prUrl: null,
       lastError: null,
       inbox: [],
+      retro: null,
       totalCostUsd: 0,
       createdAt: now(),
       updatedAt: now(),
@@ -333,7 +350,7 @@ export class TaskManager {
   }
 
   private async rolesText(): Promise<string> {
-    const roles = [...(await loadRoles()).values()].filter((r) => !SINGLETON_ROLES.has(r.name) && r.name !== SETUP_ROLE);
+    const roles = [...(await loadRoles()).values()].filter((r) => !SINGLETON_ROLES.has(r.name) && !OWN_ROLES.has(r.name));
     return [`## Roles you can spawn`, ...roles.map((r) => `- **${r.name}**: ${r.description}`)].join('\n');
   }
 
@@ -609,6 +626,7 @@ export class TaskManager {
     await rm(join(TASKS_DIR, `${task.id}.json`), { force: true });
     this.tasks.delete(id);
     this.live.delete(id);
+    this.retroDue.delete(id);
     this.emit({ type: 'task.removed', taskId: id });
     return { warnings };
   }
@@ -944,6 +962,8 @@ export class TaskManager {
         // kept running past finish may have arrived meanwhile: wake it up for those.
         void this.stopAgent(task, name).then(() => {
           this.changed(task);
+          this.retroDue.add(taskId);
+          this.roundFinished(task);
           if (task.inbox.length) this.wake(task);
         });
         return;
@@ -980,7 +1000,10 @@ export class TaskManager {
       if (!s.backgroundTasks.length) this.noReport(task, agent, s);
     } else if (!agent.busy && FINISHED_PHASES.includes(task.phase)) {
       // A validator kept running past finish has reported: nothing more for it to do.
-      void this.retire(task, agent).then(() => this.changed(task));
+      void this.retire(task, agent).then(() => {
+        this.roundFinished(task);
+        this.changed(task);
+      });
     }
     this.changed(task);
   }
@@ -994,7 +1017,12 @@ export class TaskManager {
       task,
       `[steffe] ${this.who(task, agent)} ended its turn without calling report. Its last message:\n\n${s.lastAssistantText || '(empty)'}`,
     );
-    if (FINISHED_PHASES.includes(task.phase)) void this.retire(task, agent).then(() => this.changed(task));
+    if (FINISHED_PHASES.includes(task.phase)) {
+      void this.retire(task, agent).then(() => {
+        this.roundFinished(task);
+        this.changed(task);
+      });
+    }
   }
 
   /** Close an agent that worked past finish, and the item worktree it kept alive. */
@@ -1006,6 +1034,14 @@ export class TaskManager {
     if (!FINISHED_PHASES.includes(task.phase)) return; // reopened meanwhile: the worktree is in use again
     await removeWorktree(this.project(task).path, item.worktreePath);
     item.worktreePath = null;
+  }
+
+  /** A finished round is over once the validators kept running past finish have stopped too. */
+  private roundFinished(task: Task): void {
+    if (!this.retroDue.has(task.id) || !FINISHED_PHASES.includes(task.phase)) return;
+    if (task.agents.some((a) => a.role !== 'orchestrator' && a.busy && a.state !== 'closed')) return;
+    this.retroDue.delete(task.id);
+    this.onRoundFinished?.(task);
   }
 
   /**
@@ -1286,7 +1322,7 @@ export class TaskManager {
 
   private async spawnAgent(task: Task, roleName: string, itemId: string | null, brief: string): Promise<string> {
     if (task.phase !== 'executing' && task.phase !== 'escalated') throw new Error(`task is ${task.phase}`);
-    if (SINGLETON_ROLES.has(roleName) || roleName === SETUP_ROLE) throw new Error(`cannot spawn a ${roleName}`);
+    if (SINGLETON_ROLES.has(roleName) || OWN_ROLES.has(roleName)) throw new Error(`cannot spawn a ${roleName}`);
     const role = await getRole(roleName);
     const item = itemId ? this.item(task, itemId) : undefined;
     if (roleName === 'designer' && item?.kind !== 'design') throw new Error('a designer needs a design item (kind "design")');

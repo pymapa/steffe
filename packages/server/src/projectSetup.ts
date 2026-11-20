@@ -3,7 +3,7 @@ import { setupServer, type RoleWiringInput } from './agentTools.js';
 import { loadCatalog } from './catalog.js';
 import { isGitRepo } from './git.js';
 import type { ProjectStore } from './projects.js';
-import { ROLES_DIR, getRole, loadRoles, type RoleDefinition } from './roles.js';
+import { FACILITATOR_ROLE, ROLES_DIR, getRole, loadRoles, type RoleDefinition } from './roles.js';
 import type { Sandboxes } from './isolagent.js';
 import type { ManagedSession } from './session.js';
 import type { SessionManager } from './sessionManager.js';
@@ -115,7 +115,7 @@ export class ProjectSetupManager {
     const errors: string[] = [];
     for (const w of roles) {
       const role = known.get(w.role);
-      if (!role || w.role === SETUP_ROLE) {
+      if (!role || w.role === SETUP_ROLE || w.role === FACILITATOR_ROLE) {
         errors.push(`unknown role "${w.role}"`);
         continue;
       }
@@ -132,7 +132,7 @@ export class ProjectSetupManager {
   }
 
   private async brief(project: Project): Promise<string> {
-    const roles = [...(await loadRoles()).values()].filter((r) => r.name !== SETUP_ROLE);
+    const roles = [...(await loadRoles()).values()].filter((r) => r.name !== SETUP_ROLE && r.name !== FACILITATOR_ROLE);
     const catalog = await loadCatalog(project.path);
     const own = (xs: typeof catalog.agents) => xs.filter((e) => e.source === 'project');
     const list = (xs: typeof catalog.agents) =>

@@ -78,3 +78,15 @@ export function historyEntry(m: SessionMessage): TranscriptEntry | null {
   if (blocks.length === 0) return null;
   return { id: m.uuid, role: m.type, blocks, timestamp: new Date().toISOString() };
 }
+
+/**
+ * A line of Claude Code's session file, which (unlike SessionMessage) says when it happened.
+ * Null for everything that isn't part of the main conversation.
+ */
+export function storedEntry(line: Record<string, unknown>): TranscriptEntry | null {
+  if ((line.type !== 'user' && line.type !== 'assistant') || line.isSidechain || line.isMeta) return null;
+  if (typeof line.timestamp !== 'string') return null;
+  const blocks = toBlocks((line.message as { content?: unknown } | null)?.content);
+  if (blocks.length === 0) return null;
+  return { id: String(line.uuid ?? ''), role: line.type, blocks, timestamp: line.timestamp };
+}

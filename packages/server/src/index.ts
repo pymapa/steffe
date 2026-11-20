@@ -31,6 +31,7 @@ import { loadRoles } from './roles.js';
 import { createCatalogEntry, loadCatalog, saveCatalogEntry } from './catalog.js';
 import { findFreePort, isFreeEverywhere } from './ports.js';
 import { ProjectSetupManager } from './projectSetup.js';
+import { RetroManager } from './retro.js';
 import { isGitRepo, routeGit } from './git.js';
 import { Sandboxes, listFlavors, projectAt } from './isolagent.js';
 
@@ -41,6 +42,13 @@ routeGit((cwd) => sandboxes.gitRunner(cwd));
 routeGh((cwd) => projectAt(projects, cwd)?.githubUser);
 const tasks = new TaskManager(manager, projects, sandboxes);
 const setup = new ProjectSetupManager(manager, projects, sandboxes);
+const retros = new RetroManager(manager, projects, sandboxes, tasks);
+// Every finished round gets a retro; STEFFE_RETRO=off leaves it to the button in the UI.
+if (process.env.STEFFE_RETRO !== 'off') {
+  tasks.onRoundFinished = (task) => {
+    retros.run(task.id).catch((err) => console.error(`[steffe] the retro of "${task.title}" failed to start: ${String(err)}`));
+  };
+}
 const app = new Hono();
 
 app.get('/api/health', (c) => c.json({ ok: true }));
@@ -336,7 +344,16 @@ app.post(
     return tasks.answer(id, answer);
   }),
 );
+app.post('/api/tasks/:id/retro', taskAction((id) => retros.run(id)));
+app.get('/api/tasks/:id/retro', async (c) => {
+  const record = await retros.forTask(c.req.param('id'));
+  return record ? c.json(record) : c.json({ error: 'not found' }, 404);
+});
+// Every stored retro, oldest first (query `projectId` narrows it): the raw material for analysis across tasks.
+app.get('/api/retros', async (c) => c.json(await retros.list(c.req.query('projectId'))));
+
 app.delete('/api/tasks/:id', async (c) => {
+  retros.stop(c.req.param('id'));
   const result = await tasks.remove(c.req.param('id'), { deleteBranches: c.req.query('branches') === '1' });
   return result ? c.json(result satisfies DeleteTaskResult) : c.json({ error: 'not found' }, 404);
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { readdir, readFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import {
   getSessionMessages,
   query,
@@ -22,7 +23,7 @@ import type {
 } from '@steffe/shared';
 import { InputQueue } from './inputQueue.js';
 import { HOST_ENV, type SessionSandbox } from './isolagent.js';
-import { assistantEntry, historyEntry, localUserEntry, systemEntry, userEntry } from './transcript.js';
+import { assistantEntry, historyEntry, localUserEntry, storedEntry, systemEntry, userEntry } from './transcript.js';
 
 export type Emit = (event: ServerEvent) => void;
 
@@ -443,3 +444,29 @@ export function readHistory(claudeSessionId: string, cwd: string, configDir?: st
 }
 
 let historyTurn: Promise<unknown> = Promise.resolve();
+
+/**
+ * A stored session's transcript with the time of every entry (readHistory's entries carry the
+ * time they were read: the SDK's reader drops timestamps). Reads Claude Code's session file
+ * itself; null when it isn't where it is expected, so callers can fall back to readHistory.
+ */
+export async function readTimedHistory(claudeSessionId: string, configDir?: string | null): Promise<TranscriptEntry[] | null> {
+  if (!/^[\w-]+$/.test(claudeSessionId)) return null;
+  const root = join(configDir ?? HOST_ENV.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects');
+  for (const dir of await readdir(root).catch(() => [] as string[])) {
+    const raw = await readFile(join(root, dir, `${claudeSessionId}.jsonl`), 'utf8').catch(() => null);
+    if (raw == null) continue;
+    const entries: TranscriptEntry[] = [];
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      try {
+        const e = storedEntry(JSON.parse(line) as Record<string, unknown>);
+        if (e) entries.push(e);
+      } catch {
+        // A half-written last line.
+      }
+    }
+    return entries;
+  }
+  return null;
+}

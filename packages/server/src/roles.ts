@@ -9,6 +9,9 @@ export const STEFFE_HOME =
 export const ROLES_DIR = join(STEFFE_HOME, 'roles');
 export const PLUGIN_DIR = join(STEFFE_HOME, 'plugin');
 
+/** Runs a task's retro after it finishes (retro.ts). Like the setup role, never spawned by an orchestrator. */
+export const FACILITATOR_ROLE = 'facilitator';
+
 export interface RoleDefinition {
   name: string;
   description: string;

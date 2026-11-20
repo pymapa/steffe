@@ -20,3 +20,8 @@ on its own and short enough to act on.
   - For failures: numbered, concrete findings with file:line and the fix you
     recommend.
   - Anything the next agent needs to know (ports used, env quirks, follow-ups).
+  - **Friction**, when there was any: what slowed you down or broke along the
+    way and wasn't part of the job itself (a command you had to guess, a slow
+    or flaky test run, a brief that left something out, a tool that failed),
+    one line each. The task's retro collects these; leave the section out
+    when there was none.

@@ -384,9 +384,98 @@ export interface Task {
   lastError: string | null;
   /** Messages for the orchestrator that arrived while it was not running. */
   inbox: string[];
+  /** The latest retro of the task: one runs after every finish (see RetroRecord). */
+  retro: TaskRetro | null;
   totalCostUsd: number;
   createdAt: string;
   updatedAt: string;
+}
+
+// --- Retros --------------------------------------------------------------------
+//
+// After every finish a facilitator agent looks back at the round: it reads the
+// agents' transcripts and Steffe's numbers and records what took long, what
+// failed and what was redone. Records are kept in <data dir>/retros/, one JSON
+// file each, and outlive their task: they are there to be analysed across tasks.
+
+export interface TaskRetro {
+  state: 'running' | 'done' | 'failed';
+  startedAt: string;
+  /** The stored record (GET /api/tasks/:id/retro), once done. */
+  recordId: string | null;
+  error: string | null;
+}
+
+/**
+ * slow: took much longer than it should have. failure: something broke (a command, the
+ * environment, a tool, an agent). rework: done twice (fix rounds, misunderstood brief).
+ * waste: effort that bought nothing. friction: a rule, prompt or missing piece of setup got in the way.
+ */
+export type RetroFindingKind = 'slow' | 'failure' | 'rework' | 'waste' | 'friction';
+
+export interface RetroFinding {
+  kind: RetroFindingKind;
+  title: string;
+  /** What happened, with the evidence (agent, time, command). */
+  detail: string;
+  agent: string | null;
+  itemId: string | null;
+  /** Rough time it cost. */
+  minutes: number | null;
+  /** What would prevent it: a change to a role, a skill, the project setup or the project itself. */
+  suggestion: string | null;
+}
+
+export interface RetroAnalysis {
+  /** Markdown, a few sentences: how the round went. */
+  summary: string;
+  rating: 'smooth' | 'bumpy' | 'rough';
+  wentWell: string[];
+  findings: RetroFinding[];
+}
+
+export interface RetroAgentMetrics {
+  name: string;
+  role: string;
+  itemId: string | null;
+  activeMs: number;
+  costUsd: number;
+  /** From spawn to its first message (time in the agent queue); null when unknown. */
+  waitMs: number | null;
+  toolCalls: number;
+  toolErrors: number;
+  /** Outcome of its last report (success, failure, blocked), if it reported. */
+  outcome: string | null;
+}
+
+/** What Steffe measured itself, independent of the facilitator's reading. */
+export interface RetroMetrics {
+  /** From the task's creation to the retro. */
+  wallMs: number;
+  /** Agents' working time, summed. */
+  activeMs: number;
+  costUsd: number;
+  fixRounds: number;
+  toolCalls: number;
+  toolErrors: number;
+  agents: RetroAgentMetrics[];
+  items: { id: string; title: string; kind: WorkItemKind; status: WorkItemStatus; fixRounds: number }[];
+  /** The longest tool calls of the task, longest first. */
+  slowest: { agent: string; tool: string; summary: string; seconds: number }[];
+}
+
+export interface RetroRecord {
+  id: string;
+  taskId: string;
+  projectId: string;
+  projectName: string;
+  taskTitle: string;
+  /** 1 for the first retro of a task; later ones follow a reopen (add_items) and another finish. */
+  round: number;
+  createdAt: string;
+  metrics: RetroMetrics;
+  analysis: RetroAnalysis;
+  facilitator: { model: string | null; costUsd: number; activeMs: number };
 }
 
 /** Response of DELETE /api/tasks/:id (query `branches=1` also deletes the task's branches and closes its open PR). */
