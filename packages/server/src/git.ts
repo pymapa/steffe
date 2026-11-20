@@ -5,8 +5,21 @@ import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
 
+export type GitRunner = (args: string[]) => Promise<{ stdout: string }>;
+
+let route: (cwd: string) => GitRunner | null = () => null;
+
+/**
+ * Run git for some directories elsewhere: a sandboxed project's git runs in its sandbox. Agents
+ * write those checkouts, and a hook or config they planted would otherwise run on this machine.
+ */
+export function routeGit(fn: (cwd: string) => GitRunner | null): void {
+  route = fn;
+}
+
 export async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await exec('git', args, { cwd, maxBuffer: 32 * 1024 * 1024 });
+  const run = route(cwd);
+  const { stdout } = run ? await run(args) : await exec('git', args, { cwd, maxBuffer: 32 * 1024 * 1024 });
   return stdout.trim();
 }
 

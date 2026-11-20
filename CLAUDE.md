@@ -40,6 +40,8 @@ repo's `.claude` agents, skills and tooling and proposes, per role, which of
 them to use and how (`propose_setup`). The user discusses it in chat and
 accepts it in the UI; it is stored on the project (`setup` in projects.json)
 and each task agent gets its role's wiring appended to its system prompt.
+The setup agent stays alive after Accept, and writes a suggested skill, agent
+or CLAUDE.md note into the main checkout when the user asks it to (uncommitted).
 
 ## Conventions
 
@@ -56,6 +58,9 @@ and each task agent gets its role's wiring appended to its system prompt.
   trivial prompt against a scratch directory. For tasks, run the server with
   `STEFFE_FORCE_MODEL=haiku`, a different `PORT` and a scratch
   `STEFFE_DATA_DIR`, against a scratch git repo.
+- A project with `isolagentFlavor` runs in an isolagent sandbox (`packages/server/src/isolagent.ts`,
+  `docs/isolagent-integration.md`): its sessions, git and agent ports go through the `isolagent`
+  CLI (`STEFFE_ISOLAGENT`), and paths inside are the same as on the host.
 - At most `STEFFE_MAX_AGENTS` (default 4, 0 = no limit) task agents work at
   once across all tasks; further spawns are queued (`TaskAgent.state`
   `queued`) and started by `TaskManager.drain`.

@@ -1,5 +1,6 @@
 import { listSessions } from '@anthropic-ai/claude-agent-sdk';
 import type { CreateSessionRequest, ServerEvent, StoredSession } from '@steffe/shared';
+import type { SessionSandbox } from './isolagent.js';
 import { ManagedSession, type AgentSessionConfig, type Emit } from './session.js';
 
 export class SessionManager {
@@ -28,8 +29,13 @@ export class SessionManager {
     return this.sessions.get(id);
   }
 
-  create(req: CreateSessionRequest, cwd: string, agent: AgentSessionConfig | null = null): ManagedSession {
-    const s = new ManagedSession(req, cwd, this.emit, agent);
+  create(
+    req: CreateSessionRequest,
+    cwd: string,
+    agent: AgentSessionConfig | null = null,
+    sandbox: SessionSandbox | null = null,
+  ): ManagedSession {
+    const s = new ManagedSession(req, cwd, this.emit, agent, sandbox);
     this.sessions.set(s.id, s);
     this.emit({ type: 'session.updated', session: s.summary() });
     s.start();

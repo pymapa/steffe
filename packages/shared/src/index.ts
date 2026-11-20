@@ -24,6 +24,56 @@ export interface Project {
   setup?: ProjectSetup | null;
   /** The setup agent's latest proposal, waiting for the user to accept or dismiss it. */
   setupProposal?: ProjectSetup | null;
+  /**
+   * isolagent flavor the project's sessions run in (a microVM); null: on this machine.
+   * Undefined until the user has chosen. A new project's setup agent waits for that choice.
+   */
+  isolagentFlavor?: string | null;
+}
+
+// --- isolagent sandbox ---------------------------------------------------------
+
+export interface IsolagentFlavor {
+  name: string;
+  /** claude, opencode or cursor. Steffe can only drive claude. */
+  agent: string;
+  imageBuilt: boolean;
+  imageStale: boolean;
+}
+
+/** Response for GET /api/isolagent/flavors */
+export interface FlavorListing {
+  available: boolean;
+  /** Why not (isolagent missing or too old). */
+  reason: string | null;
+  flavors: IsolagentFlavor[];
+}
+
+export type SandboxState =
+  | 'stopped'
+  | 'starting'
+  | 'running'
+  | 'approval' // the project's .isolagent.toml (or its flavor) changed: the user must approve it
+  | 'build' // the flavor's image is missing or out of date
+  | 'error';
+
+/** The sandbox of a project that has a flavor. */
+export interface SandboxStatus {
+  projectId: string;
+  /** isolagent instance name */
+  name: string;
+  state: SandboxState;
+  /** Error, or what to do about `build`. */
+  message: string | null;
+  /** Set in state `approval`. */
+  approval: { file: string; hash: string; diff: string } | null;
+  /** Non-fatal, e.g. the image's Claude Code differs from the SDK's. */
+  warning: string | null;
+}
+
+/** Request body for PUT /api/projects/:id/sandbox */
+export interface SetFlavorRequest {
+  flavor: string | null;
 }
 
 /** Request body for POST /api/projects */
@@ -35,7 +85,7 @@ export interface CreateProjectRequest {
 /** Response of POST /api/projects */
 export interface OpenProjectResult {
   project: Project;
-  /** First time this folder was opened. Steffe then starts the setup agent (git repos only). */
+  /** First time this folder was opened. The setup agent starts once the user has chosen a sandbox (git repos only). */
   created: boolean;
 }
 
@@ -157,6 +207,8 @@ export type ServerEvent =
   | { type: 'projects.snapshot'; projects: Project[] }
   | { type: 'project.updated'; project: Project }
   | { type: 'project.removed'; projectId: string }
+  | { type: 'sandboxes.snapshot'; sandboxes: SandboxStatus[] }
+  | { type: 'sandbox.updated'; sandbox: SandboxStatus }
   | { type: 'sessions.snapshot'; sessions: SessionSummary[] }
   | { type: 'session.updated'; session: SessionSummary }
   | { type: 'session.removed'; sessionId: string }

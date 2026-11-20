@@ -12,6 +12,7 @@ import type {
   Task,
   TranscriptEntry,
   DirectoryListing,
+  FlavorListing,
   ImageAttachment,
   OpenProjectResult,
   Project,
@@ -43,6 +44,13 @@ export const api = {
   acceptSetup: (projectId: string) => request<Project>(`/api/projects/${projectId}/setup/accept`, { method: 'POST' }),
   dismissSetup: (projectId: string) => request<Project>(`/api/projects/${projectId}/setup/dismiss`, { method: 'POST' }),
   clearSetup: (projectId: string) => request<Project>(`/api/projects/${projectId}/setup`, { method: 'DELETE' }),
+  listFlavors: (projectId: string) => request<FlavorListing>(`/api/isolagent/flavors?projectId=${projectId}`),
+  setFlavor: (projectId: string, flavor: string | null) =>
+    request<Project>(`/api/projects/${projectId}/sandbox`, { method: 'PUT', body: JSON.stringify({ flavor }) }),
+  startSandbox: (projectId: string) => request<void>(`/api/projects/${projectId}/sandbox/start`, { method: 'POST' }),
+  stopSandbox: (projectId: string) => request<void>(`/api/projects/${projectId}/sandbox/stop`, { method: 'POST' }),
+  approveSandbox: (projectId: string, hash: string) =>
+    request<void>(`/api/projects/${projectId}/sandbox/approve`, { method: 'POST', body: JSON.stringify({ hash }) }),
   listStoredSessions: (projectId: string) =>
     request<StoredSession[]>(`/api/projects/${projectId}/stored-sessions`),
 

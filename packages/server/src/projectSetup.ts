@@ -4,6 +4,7 @@ import { loadCatalog } from './catalog.js';
 import { isGitRepo } from './git.js';
 import type { ProjectStore } from './projects.js';
 import { ROLES_DIR, getRole, loadRoles, type RoleDefinition } from './roles.js';
+import type { Sandboxes } from './isolagent.js';
 import type { ManagedSession } from './session.js';
 import type { SessionManager } from './sessionManager.js';
 
@@ -36,6 +37,7 @@ export class ProjectSetupManager {
   constructor(
     private readonly sessions: SessionManager,
     private readonly projects: ProjectStore,
+    private readonly sandboxes: Sandboxes,
   ) {}
 
   private must(projectId: string): Project {
@@ -70,8 +72,10 @@ export class ProjectSetupManager {
         systemPromptAppend: role.prompt,
         mcpServers: { steffe: setupServer({ proposeSetup: (...a) => this.propose(projectId, ...a) }) },
         disallowedTools: role.disallowedTools,
-        writableRoots: [],
+        // Only to write what it suggested, when the user asks (see the role).
+        writableRoots: role.writable === 'cwd' ? [project.path] : [],
       },
+      await this.sandboxes.session(project),
     );
     this.live.set(projectId, session);
     return session.summary();
@@ -80,7 +84,7 @@ export class ProjectSetupManager {
   async accept(projectId: string): Promise<Project> {
     const project = this.must(projectId);
     if (!project.setupProposal) throw new Error('there is no proposal to accept');
-    this.stop(projectId);
+    // The agent stays: the user can keep talking to it (revise, write a suggested skill).
     return this.changed(await this.projects.update(projectId, { setup: project.setupProposal, setupProposal: null }));
   }
 

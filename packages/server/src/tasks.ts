@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, relative, sep } from 'node:path';
-import { DATA_DIR } from './dataDir.js';
+import { DATA_DIR, WORKTREES_DIR, projectWorktrees } from './dataDir.js';
+import { isInside, type Sandboxes } from './isolagent.js';
 import { writeFileAtomic } from './atomicWrite.js';
 import type {
   CreateTaskRequest,
@@ -36,7 +38,6 @@ import type { ManagedSession } from './session.js';
 import type { SessionManager } from './sessionManager.js';
 
 const TASKS_DIR = join(DATA_DIR, 'tasks');
-const WORKTREES_DIR = join(DATA_DIR, 'worktrees');
 
 /** Validation failures before an item is blocked and the user is asked. */
 const MAX_FIX_ROUNDS = 3;
@@ -64,7 +65,16 @@ export const MOCK_MARKER = 'STEFFE-MOCK';
 const LEGACY_MOCK_MARKER = 'CONDUCTOR-MOCK';
 
 /** Screenshots and other files agents hand over (served by GET /api/tasks/:id/artifacts/:name). */
-export const artifactsDir = (taskId: string) => join(WORKTREES_DIR, taskId, 'artifacts');
+export const artifactsDir = (task: Pick<Task, 'id' | 'projectId'>) => join(taskDir(task), 'artifacts');
+
+/**
+ * A task's folder: its worktrees and artifacts. Under its project's folder, which is what a
+ * sandboxed project shares into its sandbox. Tasks from before that layout keep their folder.
+ */
+function taskDir(task: Pick<Task, 'id' | 'projectId'>): string {
+  const old = join(WORKTREES_DIR, task.id);
+  return existsSync(old) ? old : join(projectWorktrees(task.projectId), task.id);
+}
 
 const playwrightMcp = (outputDir: string) => ({
   type: 'stdio' as const,
@@ -124,6 +134,7 @@ export class TaskManager {
   constructor(
     private readonly sessions: SessionManager,
     private readonly projects: ProjectStore,
+    private readonly sandboxes: Sandboxes,
   ) {}
 
   private emit(event: ServerEvent): void {
@@ -283,7 +294,7 @@ export class TaskManager {
   private async ensureWorktree(task: Task, type: BranchType): Promise<string> {
     if (task.worktreePath) return task.worktreePath;
     const project = this.project(task);
-    const path = join(WORKTREES_DIR, task.id, 'task');
+    const path = join(taskDir(task), 'task');
     if (task.phase !== 'triage') {
       if (task.handedOff) {
         if (await this.mainOnTaskBranch(task)) return project.path;
@@ -594,7 +605,7 @@ export class TaskManager {
       const deleteBranches = opts.deleteBranches || task.phase === 'done';
       if (deleteBranches && (task.worktreePath || task.handedOff)) warnings.push(...(await this.deleteBranches(project.path, task)));
     }
-    await rm(join(WORKTREES_DIR, task.id), { recursive: true, force: true });
+    await rm(taskDir(task), { recursive: true, force: true });
     await rm(join(TASKS_DIR, `${task.id}.json`), { force: true });
     this.tasks.delete(id);
     this.live.delete(id);
@@ -796,8 +807,14 @@ export class TaskManager {
     // A role may gain `port: true` after the agent was created (e.g. a resumed planner).
     if (role.port && agent.port == null) agent.port = await reservePort();
     if (agent.port != null) claimPort(agent.port);
+    // Before anything is recorded: a sandbox that can't start (it may need the user's approval) fails the launch.
+    const sandbox = await this.sandboxes.session(project);
+    if (sandbox && !isInside(project.path, agent.cwd) && !isInside(projectWorktrees(project.id), agent.cwd)) {
+      throw new Error(`${agent.cwd} is from before ${project.name} got a sandbox and isn't shared into it: start a new task`);
+    }
+    if (sandbox && agent.port != null) await this.sandboxes.publish(project, agent.port);
     this.carried.set(`${task.id}:${agent.name}`, { cost: agent.costUsd, resumed: !!opts.resume, activeMs: agent.activeMs });
-    const artifacts = artifactsDir(task.id);
+    const artifacts = artifactsDir(task);
     await mkdir(artifacts, { recursive: true });
 
     const item = agent.itemId ? task.plan?.items.find((i) => i.id === agent.itemId) : undefined;
@@ -857,6 +874,7 @@ export class TaskManager {
         onExit: (s) => this.onExit(task.id, agent.name, s),
         onBackgroundChange: (s) => this.onBackgroundChange(task.id, agent.name, s),
       },
+      sandbox,
     );
     if (opts.images?.length) session.send(opts.prompt, opts.images);
     agent.sessionId = session.id;
@@ -894,8 +912,14 @@ export class TaskManager {
     agent.busy = false;
     agent.pendingQuestion = null;
     // Apps the agent left running (a designer's live mock) go with it.
-    const stopped = await stopListeners(agent.port);
-    if (stopped.length) console.log(`[steffe] stopped ${name}'s processes on port ${agent.port}: ${stopped.join(', ')}`);
+    const project = this.projects.get(task.projectId);
+    if (project?.isolagentFlavor) {
+      // In a sandbox the listener on this machine is isolagent: stop the app inside instead.
+      if (agent.port != null) await this.sandboxes.release(project, agent.port);
+    } else {
+      const stopped = await stopListeners(agent.port);
+      if (stopped.length) console.log(`[steffe] stopped ${name}'s processes on port ${agent.port}: ${stopped.join(', ')}`);
+    }
     releasePort(agent.port);
   }
 
@@ -1122,7 +1146,7 @@ export class TaskManager {
           if (t.phase === 'triage' || t.phase === 'planning') {
             throw new Error(`you are talking with the user directly during ${t.phase}: ask in your reply and end your turn`);
           }
-          const dir = artifactsDir(t.id);
+          const dir = artifactsDir(t);
           const names: string[] = [];
           for (const img of images) {
             const rel = relative(dir, img.startsWith('/') ? img : join(dir, img));
@@ -1279,7 +1303,7 @@ export class TaskManager {
     const ownWorktree = item?.mode === 'worktree' && (!task.handedOff || item.kind === 'design');
     if (item && role.writable === 'cwd' && ownWorktree && !item.worktreePath) {
       item.branch = `${task.branch}--${item.id}`;
-      item.worktreePath = join(WORKTREES_DIR, task.id, 'items', item.id);
+      item.worktreePath = join(taskDir(task), 'items', item.id);
       await addWorktree(project.path, item.worktreePath, item.branch, task.branch);
     }
     if (item?.worktreePath && item.status !== 'merged' && item.status !== 'done') cwd = item.worktreePath;

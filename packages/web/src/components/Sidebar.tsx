@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { CatalogEntry, PermissionRequest, Project, ProjectCatalog, SessionSummary, Task } from '@steffe/shared';
+import type { CatalogEntry, PermissionRequest, Project, ProjectCatalog, SandboxStatus, SessionSummary, Task } from '@steffe/shared';
 import { STATUS_LABEL, taskStatus } from '../lib/taskStatus';
 import { setupSession } from './SetupView';
 
@@ -10,6 +10,7 @@ export type Selection =
   | { kind: 'task'; id: string }
   | { kind: 'session'; id: string }
   | { kind: 'setup' }
+  | { kind: 'sandbox' }
   | { kind: 'catalog'; entryKind: CatalogEntry['kind']; source: CatalogEntry['source']; name: string; edit?: boolean }
   | { kind: 'new-catalog'; entryKind: CatalogEntry['kind'] };
 
@@ -19,6 +20,7 @@ interface Props {
   tasks: Task[];
   permissions: PermissionRequest[];
   catalog: ProjectCatalog | null;
+  sandbox: SandboxStatus | null;
   selection: Selection | null;
   onSelect: (sel: Selection) => void;
 }
@@ -130,6 +132,26 @@ export function Sidebar(p: Props) {
     );
   };
 
+  const sandboxEntry = () => {
+    const state = p.sandbox?.state;
+    const unchosen = p.project.isolagentFlavor === undefined;
+    // Projects set up before sandboxes existed aren't nagged: they keep running on this machine.
+    const waiting = (unchosen && !p.project.setup) || state === 'approval' || state === 'build' || state === 'error';
+    return (
+      <ul className="session-list setup-entry">
+        <li className={`session-item ${p.selection?.kind === 'sandbox' ? 'selected' : ''}`} onClick={() => p.onSelect({ kind: 'sandbox' })}
+          title="Run this project's sessions in an isolagent microVM">
+          <div className="row">
+            <span className={`status ${waiting ? 'task-status-handoff' : state === 'running' || state === 'starting' ? 'task-status-working' : ''}`} />
+            <span className="title">Sandbox</span>
+            {waiting && <span className="badge warn">!</span>}
+          </div>
+          <div className="meta"><span>{p.project.isolagentFlavor ? `${p.project.isolagentFlavor} · ${state ?? 'stopped'}` : unchosen ? 'Not chosen' : 'Off'}</span></div>
+        </li>
+      </ul>
+    );
+  };
+
   const is = (sel: Selection) =>
     p.selection?.kind === sel.kind && ('id' in sel ? 'id' in p.selection && p.selection.id === sel.id : true);
   // Each session is exactly one task; plain SDK sessions are not listed.
@@ -168,6 +190,7 @@ export function Sidebar(p: Props) {
         })}
       </ul>
       {setupEntry()}
+      {sandboxEntry()}
       {catalogSection('agent', 'Agents', p.catalog?.agents)}
       {catalogSection('skill', 'Skills', p.catalog?.skills)}
     </aside>

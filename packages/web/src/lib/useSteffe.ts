@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   PermissionRequest,
   Project,
+  SandboxStatus,
   ServerEvent,
   SessionSummary,
   Task,
@@ -12,6 +13,7 @@ import { api } from './api';
 export interface SteffeState {
   connected: boolean;
   projects: Project[];
+  sandboxes: SandboxStatus[];
   sessions: SessionSummary[];
   tasks: Task[];
   transcripts: Record<string, TranscriptEntry[]>;
@@ -26,6 +28,7 @@ export function useSteffe() {
   const [state, setState] = useState<SteffeState>({
     connected: false,
     projects: [],
+    sandboxes: [],
     sessions: [],
     tasks: [],
     transcripts: {},
@@ -94,6 +97,10 @@ function applyEvent(s: SteffeState, e: ServerEvent): SteffeState {
         sessions: s.sessions.filter((x) => x.projectId !== e.projectId),
         tasks: s.tasks.filter((x) => x.projectId !== e.projectId),
       };
+    case 'sandboxes.snapshot':
+      return { ...s, sandboxes: e.sandboxes };
+    case 'sandbox.updated':
+      return { ...s, sandboxes: [...s.sandboxes.filter((x) => x.projectId !== e.sandbox.projectId), e.sandbox] };
     case 'sessions.snapshot':
       return { ...s, sessions: e.sessions };
     case 'session.updated': {

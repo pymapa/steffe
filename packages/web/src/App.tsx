@@ -11,6 +11,7 @@ import { NewChat } from './components/NewChat';
 import { SessionView } from './components/SessionView';
 import { TaskView } from './components/TaskView';
 import { SetupView, setupSession } from './components/SetupView';
+import { SandboxView } from './components/SandboxView';
 import { PullRequests } from './components/PullRequests';
 import { PullRequestView } from './components/PullRequestView';
 import { PrColumn } from './components/PrColumn';
@@ -44,6 +45,7 @@ export function App() {
   const session = selection.kind === 'session' ? state.sessions.find((s) => s.id === selection.id) ?? null : null;
   const task = selection.kind === 'task' ? state.tasks.find((t) => t.id === selection.id) ?? null : null;
   const listing = project ? prs.listings[project.id] : undefined;
+  const sandbox = (project?.isolagentFlavor && state.sandboxes.find((s) => s.projectId === project.id)) || null;
 
   useEffect(() => {
     api.defaults().then((d) => setBrowseRoot(d.browseRoot)).catch(() => {});
@@ -81,8 +83,8 @@ export function App() {
   const openProject = async (path: string) => {
     const { project: p, created } = await api.openProject({ path });
     setOpening(false);
-    // A new project starts with the setup agent's proposal for its agents and skills.
-    select(created ? { kind: 'setup' } : { kind: 'new-task' }, p.id);
+    // A new project starts with where its sessions run; the setup agent's proposal follows.
+    select(created ? { kind: 'sandbox' } : { kind: 'new-task' }, p.id);
   };
 
   const recentPaths = [...new Set(state.projects.map((p) => p.path))];
@@ -127,6 +129,8 @@ export function App() {
         onOpenEntry={(entryKind, name) => select({ kind: 'catalog', entryKind, source: 'project', name })}
       />
     );
+  } else if (selection.kind === 'sandbox') {
+    main = <SandboxView key={project.id} project={project} sandbox={sandbox} onFirstChoice={() => select({ kind: 'setup' })} />;
   } else if (selection.kind === 'catalog') {
     const list = selection.entryKind === 'agent' ? catalog?.agents : catalog?.skills;
     const entry = list?.find((e) => e.source === selection.source && e.name === selection.name);
@@ -204,6 +208,7 @@ export function App() {
             tasks={state.tasks}
             permissions={state.permissions}
             catalog={catalog}
+            sandbox={sandbox}
             selection={selection}
             onSelect={(sel) => select(sel)}
           />

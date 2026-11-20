@@ -21,3 +21,8 @@ function resolve(): string {
 }
 
 export const DATA_DIR = resolve();
+
+export const WORKTREES_DIR = join(DATA_DIR, 'worktrees');
+
+/** Where a project's task folders (worktrees, artifacts) go: one parent, so a sandbox can share it. */
+export const projectWorktrees = (projectId: string) => join(WORKTREES_DIR, projectId);

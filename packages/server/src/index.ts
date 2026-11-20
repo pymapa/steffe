@@ -14,6 +14,7 @@ import type {
   CreateTaskRequest,
   CreateSessionRequest,
   ImageAttachment,
+  SetFlavorRequest,
   SendMessageRequest,
   ServerEvent,
 } from '@steffe/shared';
@@ -29,12 +30,15 @@ import { loadRoles } from './roles.js';
 import { createCatalogEntry, loadCatalog, saveCatalogEntry } from './catalog.js';
 import { findFreePort, isFreeEverywhere } from './ports.js';
 import { ProjectSetupManager } from './projectSetup.js';
-import { isGitRepo } from './git.js';
+import { isGitRepo, routeGit } from './git.js';
+import { Sandboxes, listFlavors } from './isolagent.js';
 
 const manager = new SessionManager();
 const projects = new ProjectStore();
-const tasks = new TaskManager(manager, projects);
-const setup = new ProjectSetupManager(manager, projects);
+const sandboxes = new Sandboxes(projects, (event) => manager.broadcast(event));
+routeGit((cwd) => sandboxes.gitRunner(cwd));
+const tasks = new TaskManager(manager, projects, sandboxes);
+const setup = new ProjectSetupManager(manager, projects, sandboxes);
 const app = new Hono();
 
 app.get('/api/health', (c) => c.json({ ok: true }));
@@ -67,10 +71,6 @@ app.post('/api/projects', async (c) => {
   try {
     const result = await projects.open(body);
     manager.broadcast({ type: 'project.updated', project: result.project });
-    // A new project: propose how Steffe's roles should use its agents and skills.
-    if (result.created && (await isGitRepo(result.project.path))) {
-      setup.analyze(result.project.id).catch((err) => console.error(`[steffe] setup failed to start: ${String(err)}`));
-    }
     return c.json(result satisfies OpenProjectResult, result.created ? 201 : 200);
   } catch (err) {
     return c.json({ error: String(err) }, 400);
@@ -98,10 +98,56 @@ app.delete('/api/projects/:id', async (c) => {
   }
   setup.stop(id);
   for (const s of manager.list()) if (s.req.projectId === id) manager.remove(s.id);
+  const gone = projects.get(id);
+  if (gone?.isolagentFlavor) await sandboxes.forget(gone);
   if (!(await projects.remove(id))) return c.json({ error: 'not found' }, 404);
   manager.broadcast({ type: 'project.removed', projectId: id });
   return c.body(null, 204);
 });
+
+// --- isolagent sandbox ---------------------------------------------------------
+
+app.get('/api/isolagent/flavors', async (c) => {
+  const project = projects.get(c.req.query('projectId') ?? '');
+  return c.json(await listFlavors(project?.path));
+});
+
+app.put('/api/projects/:id/sandbox', async (c) => {
+  const project = projects.get(c.req.param('id'));
+  if (!project) return c.json({ error: 'not found' }, 404);
+  const flavor = ((await c.req.json()) as SetFlavorRequest).flavor || null;
+  const first = project.isolagentFlavor === undefined;
+  if (flavor === project.isolagentFlavor) return c.json(project);
+  // A live session keeps running where it was started, and its history stays there.
+  const live = manager.list().some((s) => s.req.projectId === project.id && s.status !== 'ended' && s.status !== 'error');
+  if (live) return c.json({ error: 'pause or finish the project\'s running sessions first' }, 409);
+  if (project.isolagentFlavor) await sandboxes.forget(project);
+  const updated = await projects.update(project.id, { isolagentFlavor: flavor });
+  manager.broadcast({ type: 'project.updated', project: updated });
+  manager.broadcast({ type: 'sandboxes.snapshot', sandboxes: sandboxes.list() });
+  // A new project, now that it's known where its sessions run: propose how Steffe's roles should
+  // use its agents and skills.
+  if (first && !updated.setup && !updated.setupProposal && (await isGitRepo(updated.path))) {
+    setup.analyze(updated.id).catch((err) => console.error(`[steffe] setup failed to start: ${String(err)}`));
+  }
+  return c.json(updated);
+});
+
+const sandboxAction = (fn: (project: import('@steffe/shared').Project, body: { hash?: string }) => Promise<unknown>) =>
+  async (c: import('hono').Context) => {
+    const project = projects.get(c.req.param('id')!);
+    if (!project?.isolagentFlavor) return c.json({ error: 'the project has no sandbox' }, 404);
+    try {
+      await fn(project, c.req.header('content-type')?.includes('json') ? await c.req.json().catch(() => ({})) : {});
+      return c.body(null, 204);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
+    }
+  };
+
+app.post('/api/projects/:id/sandbox/start', sandboxAction((p) => sandboxes.ensure(p)));
+app.post('/api/projects/:id/sandbox/stop', sandboxAction((p) => sandboxes.stop(p)));
+app.post('/api/projects/:id/sandbox/approve', sandboxAction((p, body) => sandboxes.approve(p, String(body.hash ?? ''))));
 
 app.get('/api/projects/:id/stored-sessions', async (c) => {
   const project = projects.get(c.req.param('id'));
@@ -212,11 +258,13 @@ app.get('/api/tasks/:id', (c) => {
 });
 
 app.get('/api/tasks/:id/agents/:name/history', async (c) => {
-  const agent = tasks.get(c.req.param('id'))?.agents.find((a) => a.name === c.req.param('name'));
-  if (!agent) return c.json({ error: 'not found' }, 404);
+  const task = tasks.get(c.req.param('id'));
+  const agent = task?.agents.find((a) => a.name === c.req.param('name'));
+  if (!task || !agent) return c.json({ error: 'not found' }, 404);
   if (!agent.claudeSessionId) return c.json([]);
   try {
-    return c.json(await readHistory(agent.claudeSessionId, agent.cwd));
+    const configDir = await sandboxes.configDir(projects.get(task.projectId));
+    return c.json(await readHistory(agent.claudeSessionId, agent.cwd, configDir));
   } catch (err) {
     return c.json({ error: String(err) }, 500);
   }
@@ -237,7 +285,7 @@ app.get('/api/tasks/:id/artifacts/:name', async (c) => {
   const type = IMAGE_TYPES[extname(name).toLowerCase()];
   if (!task || !type) return c.json({ error: 'not found' }, 404);
   try {
-    const data = await readFile(join(artifactsDir(task.id), name));
+    const data = await readFile(join(artifactsDir(task), name));
     return c.body(data, 200, { 'content-type': type, 'cache-control': 'no-cache' });
   } catch {
     return c.json({ error: 'not found' }, 404);
@@ -282,7 +330,12 @@ app.post('/api/sessions', async (c) => {
   if (!body.projectId || !body.prompt) return c.json({ error: 'projectId and prompt are required' }, 400);
   const project = projects.get(body.projectId);
   if (!project) return c.json({ error: 'project not found' }, 404);
-  const s = manager.create(body, project.path);
+  let s;
+  try {
+    s = manager.create(body, project.path, null, await sandboxes.session(project));
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
+  }
   const touched = await projects.touch(project.id);
   if (touched) manager.broadcast({ type: 'project.updated', project: touched });
   return c.json(s.summary(), 201);
@@ -335,6 +388,7 @@ wss.on('connection', (ws) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
   };
   send({ type: 'projects.snapshot', projects: projects.list() });
+  send({ type: 'sandboxes.snapshot', sandboxes: sandboxes.list() });
   send({ type: 'sessions.snapshot', sessions: manager.list().map((s) => s.summary()) });
   send({ type: 'tasks.snapshot', tasks: tasks.list() });
   for (const s of manager.list()) {
@@ -345,6 +399,7 @@ wss.on('connection', (ws) => {
 });
 
 await projects.load();
+await sandboxes.adopt();
 await tasks.load();
 // An explicit PORT (set by `npm run dev`, which also points the web proxy at
 // it) is used as is; without one, take the first free port from 4010.

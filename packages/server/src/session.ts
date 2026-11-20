@@ -21,6 +21,7 @@ import type {
   TranscriptEntry,
 } from '@steffe/shared';
 import { InputQueue } from './inputQueue.js';
+import { HOST_ENV, type SessionSandbox } from './isolagent.js';
 import { assistantEntry, historyEntry, localUserEntry, systemEntry, userEntry } from './transcript.js';
 
 export type Emit = (event: ServerEvent) => void;
@@ -67,7 +68,7 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
  * would otherwise make an agent without a private port start the project's app on Steffe's port.
  */
 function agentBaseEnv(): Record<string, string | undefined> {
-  const { PORT: _port, STEFFE_SERVER: _server, STEFFE_WEB_PORT: _web, ...rest } = process.env;
+  const { PORT: _port, STEFFE_SERVER: _server, STEFFE_WEB_PORT: _web, ...rest } = HOST_ENV;
   return rest;
 }
 
@@ -122,6 +123,8 @@ export class ManagedSession {
     readonly cwd: string,
     private readonly emit: Emit,
     readonly agent: AgentSessionConfig | null = null,
+    /** Set when the project runs in an isolagent sandbox: Claude Code is spawned inside it. */
+    private readonly sandbox: SessionSandbox | null = null,
   ) {
     this.claudeSessionId = req.resumeSessionId ?? null;
     this.title = req.title ?? req.prompt.slice(0, 60).replace(/\s+/g, ' ');
@@ -171,11 +174,17 @@ export class ManagedSession {
       canUseTool: (toolName, input, { signal }) =>
         a ? Promise.resolve(this.agentPolicy(toolName, input)) : this.askPermission(toolName, input, signal),
       stderr: (data) => process.stderr.write(`[claude ${this.id.slice(0, 8)}] ${data}`),
+      // Always explicit, never the live process.env (see readHistory).
+      env: { ...agentBaseEnv(), ...a?.env },
     };
+    const sandbox = this.sandbox;
+    if (sandbox) {
+      options.spawnClaudeCodeProcess = (o) =>
+        sandbox.spawn(o, (data) => process.stderr.write(`[claude ${this.id.slice(0, 8)}] ${data}`));
+    }
     if (a) {
       options.mcpServers = a.mcpServers;
       options.disallowedTools = a.disallowedTools;
-      options.env = { ...agentBaseEnv(), ...a.env };
       options.plugins = a.plugins?.map((path) => ({ type: 'local' as const, path }));
     }
     this.q = query({ prompt: this.input, options });
@@ -293,7 +302,7 @@ export class ManagedSession {
   /** Show the earlier conversation of a resumed session above anything new. */
   private async loadHistory(claudeSessionId: string): Promise<void> {
     try {
-      const entries = await readHistory(claudeSessionId, this.cwd);
+      const entries = await readHistory(claudeSessionId, this.cwd, this.sandbox?.configDir);
       if (entries.length === 0) return;
       entries.push(systemEntry(randomUUID(), 'Resumed session'));
       this.transcript.unshift(...entries);
@@ -410,10 +419,27 @@ export class ManagedSession {
 }
 
 /** Transcript of a stored (not live) Claude Code session, e.g. a closed task agent. */
-export async function readHistory(claudeSessionId: string, cwd: string): Promise<TranscriptEntry[]> {
-  const messages = await getSessionMessages(claudeSessionId, { dir: cwd });
-  return messages.flatMap((m) => {
-    const e = historyEntry(m);
-    return e ? [e] : [];
+export function readHistory(claudeSessionId: string, cwd: string, configDir?: string | null): Promise<TranscriptEntry[]> {
+  // A sandboxed session's transcript is in its sandbox's config dir, and the SDK only finds
+  // transcripts through CLAUDE_CONFIG_DIR. So reads take turns and set it for their duration.
+  // Sessions are spawned with an explicit env, so the swap never reaches one.
+  const run = historyTurn.then(async () => {
+    const dir = configDir ?? HOST_ENV.CLAUDE_CONFIG_DIR;
+    if (dir) process.env.CLAUDE_CONFIG_DIR = dir;
+    else delete process.env.CLAUDE_CONFIG_DIR;
+    try {
+      const messages = await getSessionMessages(claudeSessionId, { dir: cwd });
+      return messages.flatMap((m) => {
+        const e = historyEntry(m);
+        return e ? [e] : [];
+      });
+    } finally {
+      if (HOST_ENV.CLAUDE_CONFIG_DIR) process.env.CLAUDE_CONFIG_DIR = HOST_ENV.CLAUDE_CONFIG_DIR;
+      else delete process.env.CLAUDE_CONFIG_DIR;
+    }
   });
+  historyTurn = run.catch(() => {});
+  return run;
 }
+
+let historyTurn: Promise<unknown> = Promise.resolve();

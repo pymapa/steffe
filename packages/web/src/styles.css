@@ -459,3 +459,9 @@ body.resizing iframe { pointer-events: none; }
 .pill.setup-new { color: var(--ok); border-color: var(--ok); }
 .pill.setup-changed { color: var(--warn); border-color: var(--warn); }
 .setup-suggestions { padding-left: 20px; }
+
+/* Sandbox (isolagent) */
+.sandbox-view { max-width: 720px; }
+.sandbox-flavor { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.sandbox-flavor select { min-width: 280px; }
+.sandbox-approval pre { max-height: 360px; overflow: auto; padding: 10px; border: 1px solid var(--border); border-radius: 6px; white-space: pre-wrap; }
