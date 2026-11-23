@@ -97,7 +97,7 @@ function slugify(s: string): string {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
-      .slice(0, 40)
+      .slice(0, 30)
       .replace(/-+$/, '') || 'task'
   );
 }
@@ -298,9 +298,7 @@ export class TaskManager {
     this.tasks.set(id, task);
     await this.persist(task);
     const prompt = [
-      `[steffe] New message from the user. If it is a question or a request to look into something, answer it in chat: you are in the user's main checkout, read only, and no worktree exists yet. If it asks for changes, write the plan yourself and go straight to a developer (start_work). If it is about an existing pull request no Steffe task owns (check it out, hand it off, continue it), take it over with checkout_pr. Use a planner (start_planning) or a designer only when the user asks for one; if the task would greatly benefit from one, suggest it in chat and wait for the answer. start_work and start_planning create the task branch and worktree.`,
-      ``,
-      `# Task: ${title}`,
+      `[steffe] New message from the user. Once you understand what it is about, name the task (name_task): until then it is shown as the start of the request. If it is a question or a request to look into something, answer it in chat: you are in the user's main checkout, read only, and no worktree exists yet. If it asks for changes, write the plan yourself and go straight to a developer (start_work). If it is about an existing pull request no Steffe task owns (check it out, hand it off, continue it), take it over with checkout_pr. Use a planner (start_planning) or a designer only when the user asks for one; if the task would greatly benefit from one, suggest it in chat and wait for the answer. start_work and start_planning create the task branch and worktree.`,
       ``,
       `## Request`,
       req.prompt || '(see the attached image)',
@@ -331,6 +329,9 @@ export class TaskManager {
       await addWorktree(project.path, path, task.branch, task.branch);
       task.worktreePath = path;
       return path;
+    }
+    if (!task.named) {
+      throw new Error('name the task first (name_task): the branch is named after it. 2 to 4 words that say what the task is about.');
     }
     // "Fix login" -> fix/login, not fix/fix-login.
     const slug = slugify(task.title);
@@ -584,6 +585,10 @@ export class TaskManager {
     task.baseBranch = pr.baseRefName;
     task.prUrl = pr.url;
     task.adoptedPr = pr.number;
+    if (!task.named) {
+      task.title = `#${pr.number} ${pr.title}`.slice(0, 60);
+      task.named = true;
+    }
     task.plan ??= { spec: `Existing pull request #${pr.number}: ${pr.title}\n\n${pr.url}`, items: [] };
     task.phase = 'review';
     // Already on it: the task works there like after a handoff.
@@ -592,6 +597,21 @@ export class TaskManager {
       ? `The user's main checkout is already on ${head}, so the task counts as handed off.${note}`
       : `${head} is fetched but not checked out anywhere.${note} Call handoff to check it out in the user's main checkout if they asked for that.`;
     return `This task now owns PR #${pr.number} "${pr.title}" (${head} -> ${pr.baseRefName}) and is in review. ${where} If the user wants changes, add_items reopens the task; finish then pushes to the same PR and posts your report as a comment (its title and description stay).`;
+  }
+
+  /** The orchestrator names the task: its title, and (until work starts) the branch it will get. */
+  private nameTask(task: Task, name: string): string {
+    const title = name.replace(/\s+/g, ' ').trim();
+    if (!title) throw new Error('the name is empty');
+    if (title.length > 30 || title.split(' ').length > 4) {
+      throw new Error(`"${title}" is too long for a name: at most 4 words and 30 characters. Name the subject of the task, not the request.`);
+    }
+    task.title = title;
+    task.named = true;
+    for (const a of task.agents) this.live.get(task.id)?.get(a.name)?.rename(`${a.name} · ${title}`);
+    return task.worktreePath || task.handedOff || task.adoptedPr != null
+      ? `The task is now called "${title}". Its branch stays ${task.branch}.`
+      : `The task is now called "${title}".`;
   }
 
   /** The user tested it (or it was merged / closed): the task is done. The orchestrator stays reachable. */
@@ -1238,6 +1258,7 @@ export class TaskManager {
           this.setPlan(t, spec, items);
           return `Plan updated: ${items.length} items. The user sees it on the board and approves it in the UI.`;
         }),
+      nameTask: (name) => run((t) => this.nameTask(t, name)),
       startPlanning: (brief, type) => run((t) => this.startPlanning(t, brief, type)),
       approvePlan: () =>
         run(async (t) => `Plan approved; the task is now executing. Execute it:\n\n${await this.approvePlan(t)}`),

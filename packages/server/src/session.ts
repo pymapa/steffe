@@ -413,6 +413,11 @@ export class ManagedSession {
     this.touch();
   }
 
+  rename(title: string): void {
+    this.title = title;
+    this.touch();
+  }
+
   private touch(): void {
     this.updatedAt = new Date().toISOString();
     this.emit({ type: 'session.updated', session: this.summary() });

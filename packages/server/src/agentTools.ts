@@ -9,6 +9,7 @@ import { z } from 'zod';
  */
 export interface ToolHost {
   updatePlan(spec: string, items: PlanItemInput[]): Promise<string>;
+  nameTask(name: string): Promise<string>;
   startPlanning(brief: string, branchType: BranchType): Promise<string>;
   startWork(spec: string, items: PlanItemInput[], branchType: BranchType): Promise<string>;
   checkoutPr(number: number): Promise<string>;
@@ -60,7 +61,7 @@ export type BranchType = (typeof BRANCH_TYPES)[number];
 const branchType = z
   .enum(BRANCH_TYPES)
   .default('feature')
-  .describe('kind of change; the task branch is named <branch_type>/<slug of the title>');
+  .describe('kind of change; the task branch is named <branch_type>/<the name you gave with name_task>');
 
 export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerConfigWithInstance {
   const all = [
@@ -69,6 +70,12 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
       'Create or replace the task plan shown to the user on the board. Call with the full plan every time.',
       { spec: z.string().describe('markdown spec'), items: z.array(planItem) },
       wrap(({ spec, items }) => host.updatePlan(spec, items)),
+    ),
+    tool(
+      'name_task',
+      "Name the task once you understand what it is about: before start_work or start_planning (which refuse without it), and before you answer a question. The name is what the user sees in the task list, and the branch is named after it (<branch_type>/<name>). Name the subject, not the request: 'My week single table', 'Sandbox CPU limits', not the user's sentence cut short. Call it again when the task turns out to be about something else; the branch keeps its name once it exists.",
+      { name: z.string().describe('2 to 4 words, at most 30 characters, no type prefix ("Login redirect", not "Fix login redirect bug")') },
+      wrap(({ name }) => host.nameTask(name)),
     ),
     tool(
       'start_planning',

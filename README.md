@@ -95,7 +95,12 @@ continue). The detail next to it says what's waiting.
      same as the Handoff button) or reopens it for changes (`add_items`).
      `finish` then pushes to that PR and posts the report as a comment.
 
-   Every other route creates the branch `steffe/<slug>-<id>` in its own
+   On every route the orchestrator names the task (`name_task`, 2 to 4 words)
+   once it understands the request; until then the task list shows the start
+   of your message.
+
+   Every other route creates the branch `<type>/<name>` (`fix/login-redirect`;
+   the type is `feature`, `fix`, `chore`, `refactor`, `docs` or `design`) in its own
    worktree under `~/.steffe/worktrees/<task>/task` first:
    - **Design only** ("just the design"): `start_work` with one design item,
      and a designer starts right away. After you approve the design, the
