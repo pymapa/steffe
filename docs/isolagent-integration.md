@@ -26,7 +26,12 @@ names the binary).
 
 - `Project.isolagentFlavor`, picked on the project's Sandbox page (`isolagent flavors --json`).
 - `Sandboxes`: `up` on first use, found again after a restart (`ps --json`), stopped by
-  isolagent's idle timeout or from the UI. `STEFFE_SANDBOX_MEM` sets `--mem`.
+  isolagent's idle timeout or from the UI. One stopped from the UI stays stopped
+  (`Project.sandboxStopped`) until the user starts it there: meanwhile the project's sessions, git
+  and ports are on the host, as without a flavor. A session resumed on the other side gets its
+  transcript copied between the sandbox's config dir (`Project.sandboxStateDir`) and the host's. `Project.sandboxCpus` and
+  `Project.sandboxMemMb` (Sandbox page) set `--cpus` and `--mem`; `STEFFE_SANDBOX_MEM` is the
+  `--mem` of a project without its own.
 - `ManagedSession` spawns Claude Code through `exec --no-tty`, forwarding only what the session
   adds to Steffe's own environment.
 - All git of a sandboxed project runs in the sandbox (`routeGit`). On the host, a hook or

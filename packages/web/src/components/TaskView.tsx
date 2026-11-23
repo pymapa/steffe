@@ -93,7 +93,8 @@ ${answer}` : answer);
   const orchDisabled = task.phase === 'paused' ? 'The task is paused: resume it to continue' : null;
   // A retro looks back at a round that has ended.
   const canRetro = ['review', 'done', 'cancelled', 'failed'].includes(task.phase) && task.agents.length > 1;
-  const canHandoff = !live && task.phase !== 'paused' && !!task.worktreePath;
+  // A task that took over a pull request (checkout_pr) has a branch but no worktree.
+  const canHandoff = !live && task.phase !== 'paused' && (!!task.worktreePath || (task.adoptedPr != null && !task.handedOff));
   const handoff = () =>
     confirm(
       `Hand off "${task.title}"?\n\nThe task's worktrees are removed (agents' running apps are stopped) and ${task.branch} is checked out in your main checkout. Both must have no uncommitted changes.`,
@@ -122,7 +123,7 @@ ${answer}` : answer);
           <div className="meta mono task-path" title={task.worktreePath ?? undefined}>
             {task.handedOff
               ? `${task.handedOff} · checked out in your main checkout`
-              : task.worktreePath
+              : task.worktreePath || task.adoptedPr != null
                 ? `${task.branch} ← ${task.baseBranch}`
                 : `${task.baseBranch} · no worktree yet`}
           </div>

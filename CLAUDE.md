@@ -29,8 +29,11 @@ the task would greatly benefit from it. Either one creates the task
 branch and worktree. Every other agent runs
 autonomously; its `report`s and `ask_orchestrator` questions are delivered to
 the orchestrator as user messages. A finished task keeps its worktree for
-local testing until the user clicks Handoff (`TaskManager.handoff`): the
-worktree is removed and the task branch checked out in the main checkout. Roles live in `roles/*.md`, shared skills in `plugin/skills/`.
+local testing until the user clicks Handoff or asks the orchestrator for it
+(`TaskManager.handoff`): the worktree is removed and the task branch checked
+out in the main checkout. In triage the orchestrator can also take over an
+existing open PR (`checkout_pr`, `Task.adoptedPr`): the PR's branch becomes
+the task branch and the task goes straight to review, without a worktree. Roles live in `roles/*.md`, shared skills in `plugin/skills/`.
 They stay project-agnostic; project knowledge comes from the target repo's
 CLAUDE.md and skills.
 
@@ -74,6 +77,11 @@ leaves retros to the button on the task's Retro tab.
 - A project's `githubUser` / `gitEmail` (Sandbox page) are the gh login and git author of its
   sandbox, passed to `isolagent up` as `GH_TOKEN` / `GIT_USER_EMAIL`; Steffe's own `gh` calls
   (`github.ts`) use the same login. Sessions on the host are not affected.
+- A project's `sandboxCpus` / `sandboxMemMb` (Sandbox page) are its sandbox's `isolagent up`
+  `--cpus` / `--mem`; unset leaves isolagent's defaults.
 - At most `STEFFE_MAX_AGENTS` (default 4, 0 = no limit) task agents work at
   once across all tasks; further spawns are queued (`TaskAgent.state`
   `queued`) and started by `TaskManager.drain`.
+- An agent that works `STEFFE_CHECKIN_MIN` minutes (default 30, 0 = off) on one
+  assignment without reporting is announced to the orchestrator
+  (`TaskManager.checkIns`), and again every that long.

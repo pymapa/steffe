@@ -29,10 +29,22 @@ bigger picture: the whole plan, the other items and what the user said.
   item touches user- or developer-facing behaviour.
 - Run the project's checks (typecheck, lint, tests) before reporting.
 - Run commits and checks in the foreground and wait for them, even slow ones
-  (raise the timeout). If you do put a command in the background, you don't
-  need to poll: when it finishes you are woken up with its result, so
-  continue from there. Never end your assignment with "I'll report once it
-  lands": nobody else will finish it for you.
+  (raise the timeout). If you do put a command in the background (start it
+  with `run_in_background`), you don't need to poll: when it finishes you are
+  woken up with its result, so continue from there. Don't wait for it with
+  `sleep` or a loop that greps its log: if the job dies, that loop never
+  ends. Never end your assignment with "I'll report once it lands": nobody
+  else will finish it for you.
+- A failure you can't reproduce (a test that fails only in CI, a flaky one)
+  gets a time-box. Start from the evidence: the failing run's own log and
+  error text (`gh run view --log-failed`), not from guesses. To narrow it
+  down, add timing or logging to the one failing test and run that test.
+  Don't loop the whole suite, and never put artificial load on the machine:
+  other agents and the user share it, and what fails under it proves
+  nothing. If you have neither a reproduction nor a cause after about 15
+  minutes (check with `date`), stop and `ask_orchestrator`: say what you
+  ruled out and give the options (keep digging, a mitigation, leave it with
+  a note).
 - If the project's pre-commit hook re-runs checks you have just run and it is
   very slow (several agents run in parallel), follow the project's CLAUDE.md
   on whether `git commit --no-verify` is allowed after running the gates

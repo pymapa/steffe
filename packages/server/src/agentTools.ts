@@ -11,6 +11,8 @@ export interface ToolHost {
   updatePlan(spec: string, items: PlanItemInput[]): Promise<string>;
   startPlanning(brief: string, branchType: BranchType): Promise<string>;
   startWork(spec: string, items: PlanItemInput[], branchType: BranchType): Promise<string>;
+  checkoutPr(number: number): Promise<string>;
+  handoff(): Promise<string>;
   approvePlan(): Promise<string>;
   addItems(items: PlanItemInput[]): Promise<string>;
   spawnAgent(role: string, itemId: string | null, brief: string): Promise<string>;
@@ -86,6 +88,18 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
       wrap(({ spec, items, branch_type }) => host.startWork(spec, items, branch_type)),
     ),
     tool(
+      'checkout_pr',
+      "Triage decision, when the user asks to check out, test, hand off or continue an existing pull request that no Steffe task owns: this task takes the PR over. Its branch becomes the task branch (fetched from origin) and the task goes to review, as if it had opened the PR. Nothing is checked out: call handoff for that. add_items then reopens the task for changes, and finish pushes them to the same PR.",
+      { number: z.number().int().positive().describe('the pull request number') },
+      wrap(({ number }) => host.checkoutPr(number)),
+    ),
+    tool(
+      'handoff',
+      "Hand the finished task (review, done or cancelled) to the user for local testing, when they ask for it: the task's worktrees are removed and its branch is checked out in their main checkout. The same as the Handoff button. Refuses when the main checkout or a worktree has uncommitted changes.",
+      {},
+      wrap(() => host.handoff()),
+    ),
+    tool(
       'approve_plan',
       "Approve the planner's plan after the user explicitly approved it in chat. Closes the planner and returns the plan to execute.",
       {},
@@ -93,7 +107,7 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
     ),
     tool(
       'add_items',
-      'Add work items to the plan while executing, e.g. code items after the user approved a design-only start and wants it built. On a finished task (review or done) it reopens the task for changes the user asks for (start_work and start_planning only work in triage): the task executes again; finish afterwards updates the same PR. Same shape as plan items.',
+      'Add work items to the plan while executing, e.g. code items after the user approved a design-only start and wants it built. On a finished task (review or done, also after checkout_pr) it reopens the task for changes the user asks for (start_work and start_planning only work in triage): the task executes again; finish afterwards updates the same PR. Same shape as plan items.',
       { items: z.array(planItem) },
       wrap(({ items }) => host.addItems(items)),
     ),

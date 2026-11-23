@@ -29,7 +29,7 @@ import {
   statusPorcelain,
   tryGit,
 } from './git.js';
-import { closePullRequest, createPullRequest } from './github.js';
+import { closePullRequest, createPullRequest, pullRequestHead } from './github.js';
 import { claimPort, releasePort, reservePort, stopListeners } from './ports.js';
 import type { ProjectStore } from './projects.js';
 import { FACILITATOR_ROLE, PLUGIN_DIR, getRole, loadRoles } from './roles.js';
@@ -60,6 +60,12 @@ const VALIDATOR_ROLES = new Set(['reviewer', 'tester']);
 const MAX_AGENTS = Number(process.env.STEFFE_MAX_AGENTS ?? 4);
 /** After the last background command ends, how long an idle agent may take to pick up again. */
 const BACKGROUND_GRACE_MS = 30_000;
+/**
+ * How long an agent may work on one assignment before the orchestrator is told, and again every
+ * that long. The orchestrator only wakes on reports and questions, so an agent stuck on a side
+ * problem (70 minutes on a test that failed only in CI) is otherwise invisible to it. 0 turns it off.
+ */
+const CHECKIN_MS = Number(process.env.STEFFE_CHECKIN_MIN ?? 30) * 60_000;
 
 /** Marker designers put on every mock change; finish refuses to open a PR while it is on the task branch. */
 export const MOCK_MARKER = 'STEFFE-MOCK';
@@ -123,6 +129,8 @@ export class TaskManager {
    */
   private readonly carried = new Map<string, { cost: number; resumed: boolean; activeMs: number }>();
   private readonly backgroundTimers = new Map<string, NodeJS.Timeout>();
+  /** When each working agent's current assignment was first seen, and how many check-ins it has caused. */
+  private readonly workingSince = new Map<string, { since: number; told: number }>();
   /** Tasks whose stopped orchestrator is being restarted to read its inbox. */
   private readonly reviving = new Set<string>();
   private drainPending = false;
@@ -141,7 +149,9 @@ export class TaskManager {
     private readonly sessions: SessionManager,
     private readonly projects: ProjectStore,
     private readonly sandboxes: Sandboxes,
-  ) {}
+  ) {
+    if (CHECKIN_MS > 0) setInterval(() => this.checkIns(), 60_000).unref();
+  }
 
   private emit(event: ServerEvent): void {
     this.sessions.broadcast(event);
@@ -288,7 +298,7 @@ export class TaskManager {
     this.tasks.set(id, task);
     await this.persist(task);
     const prompt = [
-      `[steffe] New message from the user. If it is a question or a request to look into something, answer it in chat: you are in the user's main checkout, read only, and no worktree exists yet. If it asks for changes, write the plan yourself and go straight to a developer (start_work). Use a planner (start_planning) or a designer only when the user asks for one; if the task would greatly benefit from one, suggest it in chat and wait for the answer. start_work and start_planning create the task branch and worktree.`,
+      `[steffe] New message from the user. If it is a question or a request to look into something, answer it in chat: you are in the user's main checkout, read only, and no worktree exists yet. If it asks for changes, write the plan yourself and go straight to a developer (start_work). If it is about an existing pull request no Steffe task owns (check it out, hand it off, continue it), take it over with checkout_pr. Use a planner (start_planning) or a designer only when the user asks for one; if the task would greatly benefit from one, suggest it in chat and wait for the answer. start_work and start_planning create the task branch and worktree.`,
       ``,
       `# Task: ${title}`,
       ``,
@@ -486,17 +496,22 @@ export class TaskManager {
     if (LIVE_PHASES.includes(task.phase) || task.phase === 'paused') {
       throw new Error(`task is ${task.phase}: hand off a finished task (or cancel it first)`);
     }
-    if (!task.worktreePath) throw new Error(task.handedOff ? `already handed off (${task.handedOff})` : 'the task has no branch yet');
     const project = this.project(task);
     const items = task.plan?.items ?? [];
     // A design-only task leaves its mock on the design branch, not the task branch.
     const designOnly = items.length > 0 && items.every((i) => i.kind === 'design');
     const branch = (designOnly && items.find((i) => i.branch)?.branch) || task.branch;
+    if (!task.worktreePath) {
+      // Without a worktree the branch exists only after an earlier handoff or checkout_pr.
+      if (!task.handedOff && task.adoptedPr == null) throw new Error('the task has no branch yet');
+      const current = await tryGit(project.path, 'symbolic-ref', '--short', 'HEAD');
+      if (current.ok && current.out === branch) throw new Error(`already handed off: your main checkout is on ${branch}`);
+    }
 
     const mainDirty = await tryGit(project.path, 'status', '--porcelain', '--untracked-files=no');
     if (!mainDirty.ok) throw new Error(`git status failed in ${project.path}: ${mainDirty.out}`);
     if (mainDirty.out) throw new Error(`your main checkout has uncommitted changes; commit or stash them first:\n${mainDirty.out}`);
-    const worktrees = [task.worktreePath, ...items.map((i) => i.worktreePath).filter((p): p is string => !!p)];
+    const worktrees = [task.worktreePath, ...items.map((i) => i.worktreePath)].filter((p): p is string => !!p);
     for (const wt of worktrees) {
       const dirty = await tryGit(wt, 'status', '--porcelain');
       if (dirty.ok && dirty.out) throw new Error(`${wt} has uncommitted changes that would be lost:\n${dirty.out}`);
@@ -511,11 +526,11 @@ export class TaskManager {
         item.worktreePath = null;
       }
     }
-    await removeWorktree(project.path, task.worktreePath);
+    if (task.worktreePath) await removeWorktree(project.path, task.worktreePath);
     task.worktreePath = null;
     this.changed(task);
     const co = await tryGit(project.path, 'checkout', branch);
-    if (!co.ok) throw new Error(`the worktrees are removed, but checking out ${branch} failed:\n${co.out}`);
+    if (!co.ok) throw new Error(`${worktrees.length ? 'the worktrees are removed, but ' : ''}checking out ${branch} failed:\n${co.out}`);
     task.handedOff = branch;
     if (cut.length) {
       this.toOrchestrator(
@@ -525,6 +540,58 @@ export class TaskManager {
     }
     this.changed(task);
     return task;
+  }
+
+  /**
+   * Take over an existing pull request in triage: its branch becomes the task branch and the task
+   * goes to review, as if it had opened that PR. Nothing is checked out (handoff does that), and
+   * add_items reopens the task on the branch like any finished task.
+   */
+  private async checkoutPr(task: Task, number: number): Promise<string> {
+    if (task.phase !== 'triage') {
+      throw new Error(`checkout_pr is a triage decision; the task is ${task.phase} and has its own branch (${task.branch}). The user can start a new task for PR #${number}.`);
+    }
+    const project = this.project(task);
+    const pr = await pullRequestHead(project.path, number).catch((err: { stderr?: string; message: string }) => {
+      throw new Error(`gh pr view ${number} failed: ${(err.stderr || err.message).trim()}`);
+    });
+    if (pr.state !== 'OPEN') throw new Error(`PR #${number} is ${pr.state.toLowerCase()}: only an open pull request can be taken over`);
+    if (pr.isCrossRepository) throw new Error(`PR #${number} comes from a fork: its branch is not in this repo, so the task could not push to it`);
+    const head = pr.headRefName;
+    // A branch name is real once work started on it; before that it is only a provisional name.
+    const owner = [...this.tasks.values()].find((t) => t !== task && t.branch === head && (t.worktreePath || t.handedOff || t.prUrl));
+    if (owner) {
+      throw new Error(`PR #${number} (${head}) belongs to the Steffe task "${owner.title}" (${owner.phase}): the user can hand it off or ask for changes there`);
+    }
+
+    const fetched = await tryGit(project.path, 'fetch', 'origin', head);
+    if (!fetched.ok) throw new Error(`git fetch origin ${head} failed:\n${fetched.out}`);
+    const current = await tryGit(project.path, 'symbolic-ref', '--short', 'HEAD');
+    const onIt = current.ok && current.out === head;
+    let note = '';
+    if (!(await tryGit(project.path, 'rev-parse', '--verify', '--quiet', `refs/heads/${head}`)).ok) {
+      await git(project.path, 'branch', '--track', head, `origin/${head}`);
+    } else if (!onIt) {
+      // Fast-forward the local branch; refused when it has commits of its own or is checked out elsewhere.
+      const ff = await tryGit(project.path, 'fetch', 'origin', `${head}:${head}`);
+      if (!ff.ok) note = ` The local ${head} could not be fast-forwarded to origin's (tell the user): ${ff.out.trim()}`;
+    } else {
+      const behind = await commitsAhead(project.path, head, `origin/${head}`);
+      if (behind) note = ` It is ${behind} commit(s) behind origin/${head}: the user can pull.`;
+    }
+
+    task.branch = head;
+    task.baseBranch = pr.baseRefName;
+    task.prUrl = pr.url;
+    task.adoptedPr = pr.number;
+    task.plan ??= { spec: `Existing pull request #${pr.number}: ${pr.title}\n\n${pr.url}`, items: [] };
+    task.phase = 'review';
+    // Already on it: the task works there like after a handoff.
+    if (onIt) task.handedOff = head;
+    const where = onIt
+      ? `The user's main checkout is already on ${head}, so the task counts as handed off.${note}`
+      : `${head} is fetched but not checked out anywhere.${note} Call handoff to check it out in the user's main checkout if they asked for that.`;
+    return `This task now owns PR #${pr.number} "${pr.title}" (${head} -> ${pr.baseRefName}) and is in review. ${where} If the user wants changes, add_items reopens the task; finish then pushes to the same PR and posts your report as a comment (its title and description stay).`;
   }
 
   /** The user tested it (or it was merged / closed): the task is done. The orchestrator stays reachable. */
@@ -826,7 +893,7 @@ export class TaskManager {
     if (role.port && agent.port == null) agent.port = await reservePort();
     if (agent.port != null) claimPort(agent.port);
     // Before anything is recorded: a sandbox that can't start (it may need the user's approval) fails the launch.
-    const sandbox = await this.sandboxes.session(project);
+    const sandbox = await this.sandboxes.session(project, opts.resume);
     if (sandbox && !isInside(project.path, agent.cwd) && !isInside(projectWorktrees(project.id), agent.cwd)) {
       throw new Error(`${agent.cwd} is from before ${project.name} got a sandbox and isn't shared into it: start a new task`);
     }
@@ -931,7 +998,7 @@ export class TaskManager {
     agent.pendingQuestion = null;
     // Apps the agent left running (a designer's live mock) go with it.
     const project = this.projects.get(task.projectId);
-    if (project?.isolagentFlavor) {
+    if (project && this.sandboxes.isUp(project)) {
       // In a sandbox the listener on this machine is isolagent: stop the app inside instead.
       if (agent.port != null) await this.sandboxes.release(project, agent.port);
     } else {
@@ -1006,6 +1073,32 @@ export class TaskManager {
       });
     }
     this.changed(task);
+  }
+
+  /** Tell the orchestrator about agents that have worked long on one assignment without reporting. */
+  private checkIns(): void {
+    const seen = new Set<string>();
+    for (const task of this.tasks.values()) {
+      if (task.phase !== 'executing') continue;
+      for (const a of task.agents) {
+        if (a.role === 'orchestrator' || a.state !== 'active' || !a.busy || a.pendingQuestion) continue;
+        if (!this.live.get(task.id)?.has(a.name)) continue;
+        const key = `${task.id}:${a.name}`;
+        seen.add(key);
+        let w = this.workingSince.get(key);
+        if (!w) this.workingSince.set(key, (w = { since: Date.now(), told: 0 }));
+        const due = Math.floor((Date.now() - w.since) / CHECKIN_MS);
+        if (due <= w.told) continue;
+        w.told = due;
+        const mins = Math.round((Date.now() - w.since) / 60_000);
+        this.toOrchestrator(
+          task,
+          `[steffe] ${this.who(task, a)} has been working for ${mins} min without reporting${this.backgroundText(task, a)}. That may be fine: compare it with the size of its assignment. If it is more than the assignment should need, message_agent it: ask where it stands and what is holding it up, and from its answer narrow the goal, give it a hint, or have it report what it has. Otherwise do nothing and end your turn.`,
+        );
+        this.changed(task);
+      }
+    }
+    for (const key of this.workingSince.keys()) if (!seen.has(key)) this.workingSince.delete(key);
   }
 
   /** It ended its turn without calling report: forward what it said so the hub isn't left waiting. */
@@ -1164,6 +1257,12 @@ export class TaskManager {
           const wt = await this.ensureWorktree(t, type);
           t.phase = 'executing';
           return `Plan set with ${items.length} item(s) and the task worktree created at ${wt} on ${t.branch}; the task is now executing. Spawn the developer(s) now.`;
+        }),
+      checkoutPr: (number) => run((t) => this.checkoutPr(t, number)),
+      handoff: () =>
+        run(async (t) => {
+          await this.handoff(t.id);
+          return `${t.handedOff} is checked out in the user's main checkout (${this.project(t).path}) and the task's worktrees are gone. If they want changes, add_items: the work then happens right in that checkout.`;
         }),
       spawnAgent: (role, itemId, brief) => run((t) => this.spawnAgent(t, role, itemId, brief)),
       messageAgent: (name, text) => run((t) => this.messageAgent(t, name, text)),
@@ -1382,6 +1481,8 @@ export class TaskManager {
     const body = answering
       ? `[from orchestrator] Answer to your question.\n\n${text}\n\nContinue your assignment and call mcp__steffe__report when it is done.`
       : `[from orchestrator]\n\n${text}\n\nWhen you are finished, call mcp__steffe__report again.`;
+    // A new assignment (or one that continues after an answer) starts the check-in clock again.
+    if (!agent.busy || answering) this.workingSince.delete(`${task.id}:${name}`);
     agent.pendingQuestion = null;
     agent.busy = true;
     const live = this.live.get(task.id)?.get(name);
@@ -1530,20 +1631,21 @@ export class TaskManager {
         throw new Error(`git push failed:\n${push.out}`);
       }
       try {
-        const footer = `\n\n---\n_Opened by Steffe task "${task.title}" · ${task.plan?.items.length ?? 0} work items · $${task.totalCostUsd.toFixed(2)} agent cost_`;
+        const footer = `\n\n---\n_${task.adoptedPr != null ? 'Updated' : 'Opened'} by Steffe task "${task.title}" · ${task.plan?.items.length ?? 0} work items · $${task.totalCostUsd.toFixed(2)} agent cost_`;
         task.prUrl = await createPullRequest(wt, {
           base: task.baseBranch,
           head: task.branch,
           title: prTitle,
           body: report + footer,
           draft,
+          keepDescription: task.adoptedPr != null,
         });
       } catch (err) {
         task.phase = 'executing';
         const e = err as { stderr?: string; message: string };
         throw new Error(`gh pr create failed: ${(e.stderr || e.message).trim()}`);
       }
-      result = `Pull request opened: ${task.prUrl}`;
+      result = task.adoptedPr != null ? `Pushed to the pull request and posted the report as a comment: ${task.prUrl}` : `Pull request opened: ${task.prUrl}`;
     }
 
     await this.windDown(task, project, kept);

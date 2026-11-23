@@ -36,6 +36,17 @@ export interface Project {
   githubUser?: string | null;
   /** Git author email in the project's sandbox; unset: the global git config's. */
   gitEmail?: string | null;
+  /** vCPUs of the project's sandbox; unset: isolagent's default. */
+  sandboxCpus?: number | null;
+  /** Memory of the project's sandbox in MiB; unset: isolagent's default. */
+  sandboxMemMb?: number | null;
+  /**
+   * The user stopped the sandbox: until they start it again (Sandbox page), the project's
+   * sessions and git run on this machine.
+   */
+  sandboxStopped?: boolean;
+  /** The sandbox's Claude Code config dir on this machine (its session history), once it has run. */
+  sandboxStateDir?: string | null;
 }
 
 /** Response for GET /api/github/accounts: the logins gh is signed in to on github.com. */
@@ -47,6 +58,12 @@ export interface GithubAccounts {
 export interface SetAccountRequest {
   githubUser: string | null;
   gitEmail: string | null;
+}
+
+/** Request body for PUT /api/projects/:id/sandbox/resources; null: isolagent's default. */
+export interface SetSandboxResourcesRequest {
+  cpus: number | null;
+  memMb: number | null;
 }
 
 // --- isolagent sandbox ---------------------------------------------------------
@@ -381,6 +398,11 @@ export interface Task {
   question: TaskQuestion | null;
   report: string | null;
   prUrl: string | null;
+  /**
+   * Number of the existing pull request the task took over (checkout_pr), whose branch is the
+   * task branch. finish leaves that PR's title and description alone and comments instead.
+   */
+  adoptedPr?: number;
   lastError: string | null;
   /** Messages for the orchestrator that arrived while it was not running. */
   inbox: string[];

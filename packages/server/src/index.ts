@@ -15,6 +15,7 @@ import type {
   CreateSessionRequest,
   ImageAttachment,
   SetAccountRequest,
+  SetSandboxResourcesRequest,
   SetFlavorRequest,
   SendMessageRequest,
   ServerEvent,
@@ -161,6 +162,25 @@ app.put('/api/projects/:id/account', async (c) => {
   return c.json(updated);
 });
 
+app.put('/api/projects/:id/sandbox/resources', async (c) => {
+  const project = projects.get(c.req.param('id'));
+  if (!project) return c.json({ error: 'not found' }, 404);
+  const body = (await c.req.json()) as SetSandboxResourcesRequest;
+  const whole = (v: number | null | undefined) => (v == null ? null : Number.isInteger(v) && v > 0 ? v : NaN);
+  const sandboxCpus = whole(body.cpus);
+  const sandboxMemMb = whole(body.memMb);
+  if (Number.isNaN(sandboxCpus) || Number.isNaN(sandboxMemMb)) {
+    return c.json({ error: 'CPUs and memory must be positive whole numbers' }, 400);
+  }
+  if (sandboxCpus === (project.sandboxCpus ?? null) && sandboxMemMb === (project.sandboxMemMb ?? null)) return c.json(project);
+  const updated = await projects.update(project.id, { sandboxCpus, sandboxMemMb });
+  manager.broadcast({ type: 'project.updated', project: updated });
+  // A sandbox gets its size when it starts: as with the account, stop an unused one now.
+  const live = manager.list().some((s) => s.req.projectId === project.id && s.status !== 'ended' && s.status !== 'error');
+  if (updated.isolagentFlavor && !live) await sandboxes.stop(updated);
+  return c.json(updated);
+});
+
 const sandboxAction = (fn: (project: import('@steffe/shared').Project, body: { hash?: string }) => Promise<unknown>) =>
   async (c: import('hono').Context) => {
     const project = projects.get(c.req.param('id')!);
@@ -173,8 +193,8 @@ const sandboxAction = (fn: (project: import('@steffe/shared').Project, body: { h
     }
   };
 
-app.post('/api/projects/:id/sandbox/start', sandboxAction((p) => sandboxes.ensure(p)));
-app.post('/api/projects/:id/sandbox/stop', sandboxAction((p) => sandboxes.stop(p)));
+app.post('/api/projects/:id/sandbox/start', sandboxAction((p) => sandboxes.start(p)));
+app.post('/api/projects/:id/sandbox/stop', sandboxAction((p) => sandboxes.stop(p, true)));
 app.post('/api/projects/:id/sandbox/approve', sandboxAction((p, body) => sandboxes.approve(p, String(body.hash ?? ''))));
 
 app.get('/api/projects/:id/stored-sessions', async (c) => {
@@ -291,7 +311,7 @@ app.get('/api/tasks/:id/agents/:name/history', async (c) => {
   if (!task || !agent) return c.json({ error: 'not found' }, 404);
   if (!agent.claudeSessionId) return c.json([]);
   try {
-    const configDir = await sandboxes.configDir(projects.get(task.projectId));
+    const configDir = await sandboxes.historyDir(projects.get(task.projectId), agent.claudeSessionId);
     return c.json(await readHistory(agent.claudeSessionId, agent.cwd, configDir));
   } catch (err) {
     return c.json({ error: String(err) }, 500);
@@ -369,7 +389,7 @@ app.post('/api/sessions', async (c) => {
   if (!project) return c.json({ error: 'project not found' }, 404);
   let s;
   try {
-    s = manager.create(body, project.path, null, await sandboxes.session(project));
+    s = manager.create(body, project.path, null, await sandboxes.session(project, body.resumeSessionId));
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
   }

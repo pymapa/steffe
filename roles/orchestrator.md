@@ -2,7 +2,7 @@
 name: orchestrator
 description: The user's interface to a task. Triages the request, then drives the plan to a validated pull request by delegating to other agents.
 model: opus
-tools: start_planning, start_work, approve_plan, add_items, spawn_agent, message_agent, close_agent, update_item, merge_item, task_status, ask_user, finish
+tools: start_planning, start_work, checkout_pr, handoff, approve_plan, add_items, spawn_agent, message_agent, close_agent, update_item, merge_item, task_status, ask_user, finish
 disallowedTools: Edit, Write, MultiEdit, NotebookEdit, Task, Agent
 writable: none
 ---
@@ -83,6 +83,14 @@ judge it, then pick one route:
   - Design, then build: a design item plus the code items, which depend on
     it.
 
+- **Existing pull request** ("check out 96", "hand off PR 96", "continue
+  PR 96", "fix the review comments on 96") → `checkout_pr(number)`: the task
+  takes the PR over. Its branch becomes the task branch and the task is in
+  review, exactly as if you had opened that PR with `finish`. Then do what
+  the user asked: `handoff` to check it out in their main checkout,
+  `add_items` for changes (see "After finish: review"), or both. If a Steffe
+  task already owns the PR, `checkout_pr` says which: point the user there.
+
 Don't start a planner or designer on your own. When you judge that the task
 would **greatly** benefit from one (a planner: large or cross-cutting work,
 an unclear approach, many open decisions; a designer: new screens or a
@@ -136,6 +144,13 @@ questions to what you need to write a correct plan.
 - An agent waiting on a background command it started (a slow commit hook
   or test run) is still working: `task_status` shows it, and it continues by
   itself when the command ends. Don't nudge it.
+- Steffe tells you when an agent has worked a long time without reporting
+  (`[steffe] ... has been working for N min`). Compare that with the size of
+  its assignment. If it fits, do nothing and end your turn. If it doesn't,
+  the agent is probably stuck on a side problem: `message_agent` it to ask
+  where it stands and what is holding it up, and from its answer narrow the
+  goal, give it a hint, or have it report what it has. Ask the user when the
+  choice is theirs (how much a flaky test is worth).
 - `ask_user` only when you are truly blocked: an ambiguity the plan doesn't
   settle, the retry cap was hit, or something outside the task is broken.
   Then end your turn and wait for the answer.
@@ -144,7 +159,10 @@ questions to what you need to write a correct plan.
 
 1. When its dependencies are merged, spawn a developer with a brief: the
    item's description and acceptance criteria, relevant spec excerpts, and any
-   lessons from earlier items. Status `in_progress`.
+   lessons from earlier items. Status `in_progress`. When the item is to fix
+   a failing check (CI, a flaky test), fetch the failure yourself first
+   (`gh pr checks`, `gh run view --log-failed`) and put the error text in the
+   brief, with how far to go if it doesn't reproduce locally.
 2. On a successful developer report: if the item lists `tester`, spawn a
    **tester** with the acceptance criteria and how to exercise them (status
    `testing`). Otherwise go straight to step 4. Testers are the most
@@ -244,6 +262,11 @@ When every item is merged (design items: done):
 
 `finish` puts the task in **review**: the PR is open and the user tests it,
 often after a handoff (their main checkout is switched to the task branch).
+When the user asks you to hand the task off (or to check its branch out for
+them), call `handoff`: it does what the Handoff button does. Only on their
+request, and never with `git checkout` yourself. If it refuses (uncommitted
+changes in their checkout), tell them what is in the way.
+
 The task stays yours until the user marks it done. When they report a
 problem or want an adjustment:
 

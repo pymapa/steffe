@@ -185,15 +185,37 @@ export async function listPullRequests(
   return { available: true, reason: null, prs };
 }
 
-/** Open a PR for `head` against `base`. Returns the PR url. Reuses an existing open PR for the branch. */
+export interface PullRequestHead {
+  number: number;
+  title: string;
+  url: string;
+  state: PullRequestInfo['state'];
+  headRefName: string;
+  baseRefName: string;
+  /** Its branch lives in a fork, not in this repo. */
+  isCrossRepository: boolean;
+}
+
+/** The branches of pull request `number` in the repo at `cwd`. */
+export async function pullRequestHead(cwd: string, number: number): Promise<PullRequestHead> {
+  const fields = 'number,title,url,state,headRefName,baseRefName,isCrossRepository';
+  return JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--json', fields)) as PullRequestHead;
+}
+
+/**
+ * Open a PR for `head` against `base`. Returns the PR url. Reuses an existing open PR for the
+ * branch: its title and description are replaced, or with `keepDescription` (a PR someone else
+ * wrote) left alone and the body posted as a comment.
+ */
 export async function createPullRequest(
   cwd: string,
-  opts: { base: string; head: string; title: string; body: string; draft: boolean },
+  opts: { base: string; head: string; title: string; body: string; draft: boolean; keepDescription?: boolean },
 ): Promise<string> {
   try {
     const existing = await gh(cwd, 'pr', 'view', opts.head, '--json', 'url,state', '-q', 'select(.state=="OPEN") | .url');
     if (existing) {
-      await gh(cwd, 'pr', 'edit', opts.head, '--title', opts.title, '--body', opts.body);
+      if (opts.keepDescription) await gh(cwd, 'pr', 'comment', existing, '--body', opts.body);
+      else await gh(cwd, 'pr', 'edit', opts.head, '--title', opts.title, '--body', opts.body);
       return existing;
     }
   } catch {

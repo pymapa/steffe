@@ -176,12 +176,12 @@ export class RetroManager {
     await rm(dir, { recursive: true, force: true });
     await mkdir(join(dir, 'agents'), { recursive: true });
 
-    const configDir = await this.sandboxes.configDir(project);
     const timelines: AgentTimeline[] = [];
     for (const agent of task.agents) {
       let entries: TranscriptEntry[] = [];
       let timed = true;
       if (agent.claudeSessionId) {
+        const configDir = await this.sandboxes.historyDir(project, agent.claudeSessionId);
         const stored = await readTimedHistory(agent.claudeSessionId, configDir);
         timed = stored != null;
         entries = stored ?? (await readHistory(agent.claudeSessionId, agent.cwd, configDir).catch(() => []));

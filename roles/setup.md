@@ -28,6 +28,30 @@ change files only when the user asks you to write something you suggested (see
   `.claude/settings.json` (hooks, permissions), `.mcp.json`, and the scripts
   or docs the skills point to.
 
+## Check where the agents work
+
+Task agents don't work in this checkout. Each gets a fresh git worktree of
+it, on the same machine or in the same sandbox as you, and a worktree has
+only what git tracks. Find out what the roles' commands need beyond that and
+whether it is there (read-only checks: `ls`, `command -v`, `--version`):
+
+- **Gitignored things the checks or the app need**: `node_modules`, a Python
+  `.venv`, build output, generated code, local data, `.env` files. For each,
+  tell the roles that need it how to get it in a worktree: the project's own
+  worktree setup script if it has one, an install command, or the main
+  checkout's copy by absolute path, and what they must not do to a shared
+  copy (install into it).
+- **Tools the commands call**: are they installed here? Above all a browser
+  for Playwright: the tester and designer drive the app with the Playwright
+  MCP server, and an e2e suite needs one too. `npx playwright install
+  --dry-run` and the browser cache folder show whether one is there. In a
+  sandbox the download may be blocked.
+- **What can't run here** (no browser, no real data, no network): say so in
+  the guidance of every role that would otherwise try it and lose time, and
+  tell the orchestrator not to make an item's acceptance depend on it and to
+  list it in the PR report as not run. Put the fix (what to add to the
+  sandbox image, a setup script) in the suggestions.
+
 ## How to wire it
 
 For each Steffe role, decide which project skills and subagents it should use

@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, readFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
@@ -43,6 +44,20 @@ interface ExecError {
   stdout?: string;
   stderr?: string;
   message: string;
+}
+
+/** Claude Code's config dir on this machine. */
+const HOST_CONFIG_DIR = HOST_ENV.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+
+/** Where under a config dir's projects/ a Claude session's transcript is, and how fresh. */
+async function findTranscript(configDir: string, sessionId: string): Promise<{ folder: string; mtimeMs: number } | null> {
+  if (!/^[\w-]+$/.test(sessionId)) return null;
+  const root = join(configDir, 'projects');
+  for (const folder of await readdir(root).catch(() => [] as string[])) {
+    const s = await stat(join(root, folder, `${sessionId}.jsonl`)).catch(() => null);
+    if (s) return { folder, mtimeMs: s.mtimeMs };
+  }
+  return null;
 }
 
 export function isInside(root: string, path: string): boolean {
@@ -95,8 +110,6 @@ export class Sandboxes {
   private readonly status = new Map<string, SandboxStatus>();
   private readonly running = new Map<string, Running>();
   private readonly starting = new Map<string, Promise<Running>>();
-  /** projectId -> the sandbox's Claude Code config dir here, kept after a stop: history is read from it. */
-  private readonly stateDirs = new Map<string, string>();
 
   constructor(
     private readonly projects: ProjectStore,
@@ -143,9 +156,31 @@ export class Sandboxes {
     }
   }
 
-  /** The project's sandbox, started if needed. Null for a project without a flavor. */
+  /**
+   * Whether the project's sessions, git and ports go through its sandbox: it has a flavor, and the
+   * user hasn't stopped the sandbox. While they have, the project runs on this machine.
+   */
+  on(project: Project): boolean {
+    return !!project.isolagentFlavor && !project.sandboxStopped;
+  }
+
+  /** Whether the sandbox is up, as far as Steffe knows. */
+  isUp(project: Project): boolean {
+    return this.running.has(project.id) || this.statusOf(project).state === 'running';
+  }
+
+  /** The user starts the sandbox (again). */
+  async start(project: Project): Promise<void> {
+    if (project.sandboxStopped) await this.projects.update(project.id, { sandboxStopped: false });
+    await this.ensure(project);
+  }
+
+  /**
+   * The project's sandbox, started if needed (it may have stopped by its idle timeout). Null for
+   * a project without a flavor, or whose sandbox the user stopped.
+   */
   async ensure(project: Project): Promise<Running | null> {
-    if (!project.isolagentFlavor) return null;
+    if (!this.on(project)) return null;
     const known = this.running.get(project.id);
     if (known && Date.now() - known.checkedAt < TRUST_MS) return known;
     let pending = this.starting.get(project.id);
@@ -163,7 +198,9 @@ export class Sandboxes {
     if (fresh) this.set(project, { state: 'starting', message: null, approval: null });
     const args = ['up', '--name', name, '--flavor', project.isolagentFlavor!, '--same-path', '--share', worktrees];
     args.push('--read-only', PLUGIN_DIR, '--idle-timeout', '30m', '--json');
-    if (process.env.STEFFE_SANDBOX_MEM) args.push('--mem', process.env.STEFFE_SANDBOX_MEM);
+    const mem = project.sandboxMemMb ? String(project.sandboxMemMb) : process.env.STEFFE_SANDBOX_MEM;
+    if (mem) args.push('--mem', mem);
+    if (project.sandboxCpus) args.push('--cpus', String(project.sandboxCpus));
     args.push(project.path);
     try {
       // isolagent reads the account and the git author from its environment, at each start.
@@ -174,7 +211,7 @@ export class Sandboxes {
       const info = JSON.parse(stdout) as { state_dir: string };
       const r: Running = { name, stateDir: info.state_dir, checkedAt: Date.now() };
       const restarted = !this.running.has(project.id);
-      this.stateDirs.set(project.id, r.stateDir);
+      if (project.sandboxStateDir !== r.stateDir) await this.projects.update(project.id, { sandboxStateDir: r.stateDir });
       this.running.set(project.id, r);
       if (restarted) this.set(project, { state: 'running', message: null, approval: null, warning: await this.versionWarning(r) });
       return r;
@@ -221,9 +258,16 @@ export class Sandboxes {
     return null;
   }
 
-  /** What a session of this project spawns Claude Code with; null runs it on this machine. */
-  async session(project: Project): Promise<SessionSandbox | null> {
+  /**
+   * What a session of this project spawns Claude Code with; null runs it on this machine. A
+   * session to resume is brought to where it will run, if it last ran on the other side.
+   */
+  async session(project: Project, resumeSessionId?: string | null): Promise<SessionSandbox | null> {
     const r = await this.ensure(project);
+    const stateDir = r?.stateDir ?? project.sandboxStateDir;
+    if (resumeSessionId && stateDir) {
+      await (r ? this.carry(resumeSessionId, HOST_CONFIG_DIR, stateDir) : this.carry(resumeSessionId, stateDir, HOST_CONFIG_DIR));
+    }
     if (!r) return null;
     return {
       configDir: r.stateDir,
@@ -246,10 +290,28 @@ export class Sandboxes {
     };
   }
 
-  /** Where the project's session history is on this machine; null: the usual place. */
-  async configDir(project: Project | undefined): Promise<string | null> {
-    if (!project?.isolagentFlavor) return null;
-    return this.stateDirs.get(project.id) ?? (await this.ensure(project))?.stateDir ?? null;
+  /**
+   * Copy a Claude session's transcript (and its subagents') from one config dir to the other,
+   * unless the other has it as fresh. Paths are the same in a sandbox, so it resumes on either side.
+   */
+  private async carry(sessionId: string, from: string, to: string): Promise<void> {
+    const [src, dst] = await Promise.all([findTranscript(from, sessionId), findTranscript(to, sessionId)]);
+    if (!src || (dst && dst.mtimeMs >= src.mtimeMs)) return;
+    const target = join(to, 'projects', src.folder);
+    await mkdir(target, { recursive: true });
+    await cp(join(from, 'projects', src.folder, `${sessionId}.jsonl`), join(target, `${sessionId}.jsonl`));
+    await cp(join(from, 'projects', src.folder, sessionId), join(target, sessionId), { recursive: true }).catch(() => {}); // no subagents
+  }
+
+  /**
+   * The config dir that has a Claude session's history: the sandbox's (on this machine), or null
+   * for the usual place. The fresher one, when the session ran on both sides.
+   */
+  async historyDir(project: Project | undefined, sessionId: string): Promise<string | null> {
+    const stateDir = project?.sandboxStateDir;
+    if (!stateDir) return null;
+    const [inside, here] = await Promise.all([findTranscript(stateDir, sessionId), findTranscript(HOST_CONFIG_DIR, sessionId)]);
+    return inside && (!here || inside.mtimeMs > here.mtimeMs) ? stateDir : null;
   }
 
   /** Run a command in the project's sandbox. */
@@ -261,7 +323,7 @@ export class Sandboxes {
 
   private projectAt(cwd: string): Project | undefined {
     const project = projectAt(this.projects, cwd);
-    return project?.isolagentFlavor ? project : undefined;
+    return project && this.on(project) ? project : undefined;
   }
 
   /** For routeGit: git in a sandboxed project's checkouts runs in its sandbox. */
@@ -301,7 +363,9 @@ export class Sandboxes {
     await exec(BIN, ['ports', r.name, ...ports.flatMap((p) => ['--rm', p])]).catch(() => {});
   }
 
-  async stop(project: Project): Promise<void> {
+  /** `hold`: the user stopped it, and it stays stopped until they start it (see on). */
+  async stop(project: Project, hold = false): Promise<void> {
+    if (hold && !project.sandboxStopped) await this.projects.update(project.id, { sandboxStopped: true });
     // A start under way would otherwise finish after this and leave the sandbox up.
     await this.starting.get(project.id)?.catch(() => {});
     this.running.delete(project.id);
@@ -316,13 +380,13 @@ export class Sandboxes {
     } catch (err) {
       throw new Error(reason(err));
     }
-    await this.ensure(project);
+    await this.start(project);
   }
 
   /** Forget a project's sandbox (its flavor changed, or the project is gone). */
   async forget(project: Project): Promise<void> {
     await this.stop(project);
+    await this.projects.update(project.id, { sandboxStopped: false, sandboxStateDir: null }).catch(() => {});
     this.status.delete(project.id);
-    this.stateDirs.delete(project.id);
   }
 }

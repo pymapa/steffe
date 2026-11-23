@@ -52,6 +52,8 @@ export const api = {
   listGithubAccounts: () => request<GithubAccounts>('/api/github/accounts'),
   setAccount: (projectId: string, githubUser: string | null, gitEmail: string | null) =>
     request<Project>(`/api/projects/${projectId}/account`, { method: 'PUT', body: JSON.stringify({ githubUser, gitEmail }) }),
+  setSandboxResources: (projectId: string, cpus: number | null, memMb: number | null) =>
+    request<Project>(`/api/projects/${projectId}/sandbox/resources`, { method: 'PUT', body: JSON.stringify({ cpus, memMb }) }),
   startSandbox: (projectId: string) => request<void>(`/api/projects/${projectId}/sandbox/start`, { method: 'POST' }),
   stopSandbox: (projectId: string) => request<void>(`/api/projects/${projectId}/sandbox/stop`, { method: 'POST' }),
   approveSandbox: (projectId: string, hash: string) =>

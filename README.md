@@ -88,6 +88,13 @@ continue). The detail next to it says what's waiting.
    - **Question** ("what is in X", "how does Y work"): it answers in chat. No
      branch or worktree is created.
 
+   - **Existing pull request** ("check out 96 and hand it off", "continue PR
+     96"): `checkout_pr` makes the task take over an open PR that no task
+     owns. Its branch becomes the task branch and the task is in review, as
+     if it had opened that PR: the orchestrator hands it off (`handoff`, the
+     same as the Handoff button) or reopens it for changes (`add_items`).
+     `finish` then pushes to that PR and posts the report as a comment.
+
    Every other route creates the branch `steffe/<slug>-<id>` in its own
    worktree under `~/.steffe/worktrees/<task>/task` first:
    - **Design only** ("just the design"): `start_work` with one design item,
@@ -183,6 +190,12 @@ tab shows the latest one, and can run one by hand. Every retro is kept as a
 JSON file in `~/.steffe/retros/`, also after its task is deleted, so they can
 be analysed together (`GET /api/retros`). `STEFFE_RETRO=off` turns the
 automatic retro off.
+
+The orchestrator only wakes up on reports and questions. When an agent has
+worked `STEFFE_CHECKIN_MIN` minutes (default 30, 0 = off) on one assignment
+without reporting, and every that long again, Steffe tells the orchestrator,
+which asks the agent where it stands when that is more than the assignment
+should need.
 
 Set `STEFFE_FORCE_MODEL=haiku` to run every role on a cheap model for smoke
 tests. `STEFFE_AGENT_PORT_BASE` moves the agent port range.

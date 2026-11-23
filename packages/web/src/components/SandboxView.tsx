@@ -16,6 +16,10 @@ const STATE_CLASS: Partial<Record<SandboxStatus['state'], string>> = {
   build: 'task-status-handoff',
 };
 
+function memGbOf(project: Project): string {
+  return project.sandboxMemMb ? String(project.sandboxMemMb / 1024) : '';
+}
+
 /** Which isolagent flavor (microVM image) the project's sessions run in, and that sandbox's state. */
 export function SandboxView({ project, sandbox, onFirstChoice }: Props) {
   const [listing, setListing] = useState<FlavorListing | null>(null);
@@ -23,6 +27,8 @@ export function SandboxView({ project, sandbox, onFirstChoice }: Props) {
   const [busy, setBusy] = useState(false);
   const [accounts, setAccounts] = useState<string[]>([]);
   const [email, setEmail] = useState(project.gitEmail ?? '');
+  const [cpus, setCpus] = useState(String(project.sandboxCpus ?? ''));
+  const [memGb, setMemGb] = useState(memGbOf(project));
   const githubUser = project.githubUser ?? '';
   const flavor = project.isolagentFlavor ?? '';
   const unchosen = project.isolagentFlavor === undefined;
@@ -40,6 +46,26 @@ export function SandboxView({ project, sandbox, onFirstChoice }: Props) {
   }, []);
 
   useEffect(() => setEmail(project.gitEmail ?? ''), [project.id, project.gitEmail]);
+
+  useEffect(() => {
+    setCpus(String(project.sandboxCpus ?? ''));
+    setMemGb(memGbOf(project));
+  }, [project.id, project.sandboxCpus, project.sandboxMemMb]);
+
+  /** Save the CPU and memory fields if they differ from the project's; an invalid one is put back. */
+  const saveResources = () => {
+    const c = cpus.trim() ? Number(cpus) : null;
+    const m = memGb.trim() ? Math.round(Number(memGb) * 1024) : null;
+    const bad = (v: number | null) => v !== null && !(Number.isInteger(v) && v > 0);
+    if (bad(c) || bad(m)) {
+      setCpus(String(project.sandboxCpus ?? ''));
+      setMemGb(memGbOf(project));
+      setError('CPUs must be a positive whole number and memory a positive number of GB.');
+      return;
+    }
+    if (c === (project.sandboxCpus ?? null) && m === (project.sandboxMemMb ?? null)) return;
+    void act(() => api.setSandboxResources(project.id, c, m));
+  };
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -96,7 +122,8 @@ export function SandboxView({ project, sandbox, onFirstChoice }: Props) {
             <p className="muted">
               Applies to sessions started from now on. A sandbox keeps its own session history and Claude login: log in
               once with <code>isolagent run --flavor {flavor || '<flavor>'}</code> in a terminal. Tasks started before the
-              project had a sandbox can't continue in it.
+              project had a sandbox can't continue in it. While you have stopped the sandbox, sessions run on this
+              machine instead, until you start it again; a resumed session continues where it left off, on either side.
             </p>
             <label className="sandbox-flavor">
               <span>GitHub account</span>
@@ -118,6 +145,24 @@ export function SandboxView({ project, sandbox, onFirstChoice }: Props) {
               The account that <code>gh</code> and <code>git push</code> use in the sandbox, and that Steffe lists and
               opens pull requests with. The email is the sandbox's commit author. A sandbox takes both when it starts:
               restart one that has sessions running. Sessions on this machine keep your own gh and git setup.
+            </p>
+            <label className="sandbox-flavor">
+              <span>CPUs</span>
+              <input type="number" min={1} step={1} value={cpus} placeholder="isolagent's default (4)" disabled={busy}
+                onChange={(e) => setCpus(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                onBlur={saveResources} />
+            </label>
+            <label className="sandbox-flavor">
+              <span>Memory (GB)</span>
+              <input type="number" min={0.5} step={0.5} value={memGb} placeholder="isolagent's default (4)" disabled={busy}
+                onChange={(e) => setMemGb(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                onBlur={saveResources} />
+            </label>
+            <p className="muted">
+              The most vCPUs and memory the sandbox may use. Like the account, a sandbox takes them when it starts:
+              restart one that has sessions running.
             </p>
             {sandbox?.message && <p className={sandbox.state === 'error' ? 'error' : ''}>{sandbox.message}</p>}
             {sandbox?.warning && <p className="muted">{sandbox.warning}</p>}
