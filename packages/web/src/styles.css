@@ -121,6 +121,15 @@ label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); fo
 .composer-attachments { display: flex; gap: 8px; overflow-x: auto; }
 .composer-attachment { position: relative; flex: none; }
 .composer-attachment img { display: block; height: 64px; max-width: 160px; object-fit: cover; border: 1px solid var(--border); border-radius: 4px; }
+.composer-file { height: 64px; max-width: 200px; padding: 8px 24px 8px 10px; display: flex; align-items: center; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-3); font-size: 12px; overflow: hidden; word-break: break-all; }
+.model-select { width: auto; padding: 2px 6px; font-size: 12px; font-family: var(--mono); }
+.new-session-options { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.new-session-options label { min-width: 220px; }
+.new-session-options .model-select { width: 100%; padding: 8px 10px; font: inherit; }
+.new-session-resume-head { margin: 24px 0 8px; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.new-session-resume { max-width: 720px; }
+.new-session-resume .session-item { border-color: var(--border); }
+.new-session-resume .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .composer-attachment button { position: absolute; top: 2px; right: 2px; padding: 0 5px; line-height: 16px; font-size: 13px; border-radius: 8px; }
 
 /* directory picker */

@@ -192,10 +192,13 @@ export interface SessionDetail extends SessionSummary {
   transcript: TranscriptEntry[];
 }
 
-/** Request body for POST /api/sessions */
+/** Request body for POST /api/sessions: a free session, i.e. plain Claude Code in the project's folder. */
 export interface CreateSessionRequest {
   projectId: string;
+  /** May be empty when there are attachments, or when resuming. */
   prompt: string;
+  /** Sent with the first message; not stored. */
+  attachments?: Attachment[];
   model?: string;
   permissionMode?: PermissionMode;
   /** Resume an existing Claude Code session id instead of starting fresh. */
@@ -206,18 +209,35 @@ export interface CreateSessionRequest {
 /** Request body for POST /api/sessions/:id/messages */
 export interface SendMessageRequest {
   prompt: string;
-  images?: ImageAttachment[];
+  attachments?: Attachment[];
+}
+
+/** Request body for PUT /api/sessions/:id/model. null is Claude Code's default model. */
+export interface SetModelRequest {
+  model: string | null;
 }
 
 /**
- * An image (e.g. a pasted screenshot) sent along with a message. It is passed
- * straight to the Claude session and not stored by Steffe.
+ * A file sent along with a message: an image (e.g. a pasted screenshot), a PDF
+ * or a text file. Those are passed straight to the Claude session and not
+ * stored by Steffe. Any other file (`application/octet-stream`: an Office
+ * document, an archive, a text file or PDF too large to inline) is saved to
+ * disk by the server, and the session gets its path to open with its tools.
  */
-export interface ImageAttachment {
-  mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
-  /** Base64, without the data: URL prefix. */
+export interface Attachment {
+  mediaType:
+    | 'image/png'
+    | 'image/jpeg'
+    | 'image/gif'
+    | 'image/webp'
+    | 'application/pdf'
+    | 'text/plain'
+    | 'application/octet-stream';
+  /** Base64, without the data: URL prefix. Text files are UTF-8. */
   data: string;
   name: string;
+  /** Server only: where an `application/octet-stream` file was saved (its `data` is then dropped). */
+  path?: string;
 }
 
 /** A session discovered on disk (~/.claude/projects) that isn't currently live. */
@@ -515,13 +535,13 @@ export interface CreateTaskRequest {
   prompt: string;
   title?: string;
   /** Sent to the orchestrator with the first message; not stored. */
-  images?: ImageAttachment[];
+  attachments?: Attachment[];
 }
 
 /** Request body for POST /api/tasks/:id/message: the user writes to the orchestrator (restarted if it was stopped). */
 export interface TaskMessageRequest {
   text: string;
-  images?: ImageAttachment[];
+  attachments?: Attachment[];
 }
 
 /** Request body for POST /api/tasks/:id/answer */

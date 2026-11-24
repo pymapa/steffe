@@ -5,6 +5,7 @@ import { setupSession } from './SetupView';
 
 export type Selection =
   | { kind: 'new-task' }
+  | { kind: 'new-session' }
   | { kind: 'prs' }
   | { kind: 'pr'; number: number }
   | { kind: 'task'; id: string }
@@ -154,8 +155,9 @@ export function Sidebar(p: Props) {
 
   const is = (sel: Selection) =>
     p.selection?.kind === sel.kind && ('id' in sel ? 'id' in p.selection && p.selection.id === sel.id : true);
-  // Each session is exactly one task; plain SDK sessions are not listed.
   const tasks = p.tasks.filter((t) => t.projectId === p.project.id);
+  // Free sessions: plain Claude Code, no task and no role (the setup agent has one).
+  const free = p.sessions.filter((s) => s.projectId === p.project.id && !s.taskId && !s.role);
 
   return (
     <aside className="sidebar">
@@ -189,6 +191,36 @@ export function Sidebar(p: Props) {
           );
         })}
       </ul>
+      <div className="column-head">
+        <h1 title="Plain Claude Code sessions in this project's folder, without an orchestrator">
+          Free sessions <span className="muted">{free.length || ''}</span>
+        </h1>
+        <button className="small" onClick={() => p.onSelect({ kind: 'new-session' })}>+ New</button>
+      </div>
+      {free.length > 0 && (
+        <ul className="session-list">
+          {free.map((s) => {
+            const asking = p.permissions.some((x) => x.sessionId === s.id);
+            return (
+              <li
+                key={s.id}
+                className={`session-item ${is({ kind: 'session', id: s.id }) ? 'selected' : ''}`}
+                onClick={() => p.onSelect({ kind: 'session', id: s.id })}
+              >
+                <div className="row">
+                  <span className={`status ${asking ? 'task-status-waiting' : `status-${s.status}`}`} />
+                  <span className="title" title={s.title}>{s.title}</span>
+                  {asking && <span className="badge warn">!</span>}
+                </div>
+                <div className="meta">
+                  <span className="status-detail">{asking ? 'needs permission' : s.status}{s.model ? ` · ${s.model}` : ''}</span>
+                  <span>${s.totalCostUsd.toFixed(2)}</span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {setupEntry()}
       {sandboxEntry()}
       {catalogSection('agent', 'Agents', p.catalog?.agents)}

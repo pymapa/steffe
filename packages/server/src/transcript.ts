@@ -14,6 +14,9 @@ function toBlocks(content: unknown): TranscriptBlock[] {
       case 'image':
         out.push({ type: 'text', text: '📎 image' });
         break;
+      case 'document':
+        out.push({ type: 'text', text: `📎 ${String(block.title ?? 'document')}` });
+        break;
       case 'thinking':
         if (block.thinking) out.push({ type: 'thinking', text: String(block.thinking) });
         break;
@@ -74,6 +77,8 @@ export function systemEntry(id: string, text: string): TranscriptEntry {
 export function historyEntry(m: SessionMessage): TranscriptEntry | null {
   if (m.parent_tool_use_id) return null; // inner subagent traffic
   const content = (m.message as { content?: unknown } | null)?.content;
+  // Slash commands Claude Code records for itself (a model switch is stored as /model).
+  if (typeof content === 'string' && /^\s*<(command-name|local-command-stdout|local-command-caveat)>/.test(content)) return null;
   const blocks = toBlocks(content);
   if (blocks.length === 0) return null;
   return { id: m.uuid, role: m.type, blocks, timestamp: new Date().toISOString() };

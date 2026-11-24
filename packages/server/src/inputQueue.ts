@@ -1,5 +1,26 @@
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { ImageAttachment } from '@steffe/shared';
+import type { Attachment } from '@steffe/shared';
+
+type ContentBlock = Exclude<SDKUserMessage['message']['content'], string>[number];
+
+function attachmentBlock(a: Attachment): ContentBlock {
+  if (a.mediaType === 'application/octet-stream') {
+    // Saved to disk by storeFiles: the session opens it with its own tools.
+    return {
+      type: 'text',
+      text: `<file name=${JSON.stringify(a.name)} path=${JSON.stringify(a.path)} />\nThe user attached this file. It is saved at that path; open it with your tools.`,
+    };
+  }
+  if (a.mediaType === 'application/pdf') {
+    return { type: 'document', source: { type: 'base64', media_type: a.mediaType, data: a.data }, title: a.name };
+  }
+  if (a.mediaType === 'text/plain') {
+    // Inlined, so it reads the same whatever the file is (code, CSV, logs).
+    const text = Buffer.from(a.data, 'base64').toString('utf8');
+    return { type: 'text', text: `<file name=${JSON.stringify(a.name)}>\n${text}\n</file>` };
+  }
+  return { type: 'image', source: { type: 'base64', media_type: a.mediaType, data: a.data } };
+}
 
 /**
  * A push-based AsyncIterable. The SDK's streaming-input mode pulls user turns
@@ -11,14 +32,11 @@ export class InputQueue implements AsyncIterable<SDKUserMessage> {
   private waiter: ((value: IteratorResult<SDKUserMessage>) => void) | null = null;
   private closed = false;
 
-  push(prompt: string, images: ImageAttachment[] = []): void {
+  push(prompt: string, attachments: Attachment[] = []): void {
     if (this.closed) throw new Error('input queue is closed');
-    const content: SDKUserMessage['message']['content'] = images.length
+    const content: SDKUserMessage['message']['content'] = attachments.length
       ? [
-          ...images.map((img) => ({
-            type: 'image' as const,
-            source: { type: 'base64' as const, media_type: img.mediaType, data: img.data },
-          })),
+          ...attachments.map(attachmentBlock),
           // The API rejects empty text blocks.
           ...(prompt ? [{ type: 'text' as const, text: prompt }] : []),
         ]

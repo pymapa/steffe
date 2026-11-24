@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ImageAttachment, PermissionRequest, SessionSummary, Task, TaskAgent, TranscriptEntry, WorkItem } from '@steffe/shared';
+import type { Attachment, PermissionRequest, SessionSummary, Task, TaskAgent, TranscriptEntry, WorkItem } from '@steffe/shared';
 import { api } from '../lib/api';
 import { STATUS_LABEL, taskStatus } from '../lib/taskStatus';
 import { ImageLightbox } from './ImageLightbox';
@@ -89,7 +89,7 @@ ${answer}` : answer);
   const itemBranches = items.map((i) => i.branch).filter((b): b is string => !!b);
   const live = ['triage', 'planning', 'executing', 'escalated', 'finishing'].includes(task.phase);
   // The orchestrator stays reachable after the task ends: messaging it resumes it.
-  const orchSend = (text: string, images: ImageAttachment[]) => api.messageTask(task.id, text, images);
+  const orchSend = (text: string, attachments: Attachment[]) => api.messageTask(task.id, text, attachments);
   const orchDisabled = task.phase === 'paused' ? 'The task is paused: resume it to continue' : null;
   // A retro looks back at a round that has ended.
   const canRetro = ['review', 'done', 'cancelled', 'failed'].includes(task.phase) && task.agents.length > 1;

@@ -28,10 +28,10 @@ export function NewChat({ project, onCreated }: Props) {
       <Composer
         autoFocus
         disabledReason={null}
-        onSend={async (prompt, images) => {
+        onSend={async (prompt, attachments) => {
           setBusy(true);
           try {
-            onCreated(await api.createTask({ projectId: project.id, prompt, images }));
+            onCreated(await api.createTask({ projectId: project.id, prompt, attachments }));
           } finally {
             setBusy(false);
           }

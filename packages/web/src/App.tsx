@@ -8,6 +8,7 @@ import { api } from './lib/api';
 import { Sidebar, type Selection } from './components/Sidebar';
 import { ProjectTabs } from './components/ProjectTabs';
 import { NewChat } from './components/NewChat';
+import { NewSession } from './components/NewSession';
 import { SessionView } from './components/SessionView';
 import { TaskView } from './components/TaskView';
 import { SetupView, setupSession } from './components/SetupView';
@@ -70,7 +71,7 @@ export function App() {
   }, [state.projects, projectId]);
   useEffect(() => {
     if (!project) return;
-    if (selection.kind === 'session' && !state.sessions.some((s) => s.id === selection.id)) select({ kind: 'new-task' });
+    if (selection.kind === 'session' && !state.sessions.some((s) => s.id === selection.id)) select({ kind: 'new-session' });
     if (selection.kind === 'task' && !state.tasks.some((t) => t.id === selection.id)) select({ kind: 'new-task' });
   }, [state.sessions, state.tasks, selection, project]);
 
@@ -116,6 +117,8 @@ export function App() {
         permissions={state.permissions.filter((p) => p.sessionId === session.id)}
       />
     );
+  } else if (selection.kind === 'new-session') {
+    main = <NewSession key={project.id} project={project} onCreated={(s) => select({ kind: 'session', id: s.id })} />;
   } else if (selection.kind === 'setup') {
     main = (
       <SetupView

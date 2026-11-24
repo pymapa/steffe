@@ -15,7 +15,7 @@ import type {
   DirectoryListing,
   FlavorListing,
   GithubAccounts,
-  ImageAttachment,
+  Attachment,
   OpenProjectResult,
   Project,
   SessionDetail,
@@ -66,11 +66,13 @@ export const api = {
   getSession: (id: string) => request<SessionDetail>(`/api/sessions/${id}`),
   createSession: (body: CreateSessionRequest) =>
     request<SessionSummary>('/api/sessions', { method: 'POST', body: JSON.stringify(body) }),
-  sendMessage: (id: string, prompt: string, images: ImageAttachment[] = []) =>
+  sendMessage: (id: string, prompt: string, attachments: Attachment[] = []) =>
     request<void>(`/api/sessions/${id}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ prompt, images }),
+      body: JSON.stringify({ prompt, attachments }),
     }),
+  setModel: (id: string, model: string | null) =>
+    request<void>(`/api/sessions/${id}/model`, { method: 'PUT', body: JSON.stringify({ model }) }),
   interrupt: (id: string) => request<void>(`/api/sessions/${id}/interrupt`, { method: 'POST' }),
   close: (id: string) => request<void>(`/api/sessions/${id}`, { method: 'DELETE' }),
   resolvePermission: (requestId: string, allow: boolean) =>
@@ -86,8 +88,8 @@ export const api = {
   pauseTask: (id: string) => request<Task>(`/api/tasks/${id}/pause`, { method: 'POST' }),
   resumeTask: (id: string) => request<Task>(`/api/tasks/${id}/resume`, { method: 'POST' }),
   cancelTask: (id: string) => request<Task>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
-  messageTask: (id: string, text: string, images: ImageAttachment[] = []) =>
-    request<Task>(`/api/tasks/${id}/message`, { method: 'POST', body: JSON.stringify({ text, images }) }),
+  messageTask: (id: string, text: string, attachments: Attachment[] = []) =>
+    request<Task>(`/api/tasks/${id}/message`, { method: 'POST', body: JSON.stringify({ text, attachments }) }),
   completeTask: (id: string) => request<Task>(`/api/tasks/${id}/complete`, { method: 'POST' }),
   handoffTask: (id: string) => request<Task>(`/api/tasks/${id}/handoff`, { method: 'POST' }),
   answerTask: (id: string, answer: string) =>

@@ -15,7 +15,15 @@ npm workspaces: `packages/shared` (types), `packages/server` (Hono + ws, port 40
 
 Projects (opened folders, persisted in `~/.steffe/projects.json` by
 `packages/server/src/projects.ts`) contain sessions (live SDK queries, in
-memory) and tasks. A plain session's cwd is its project's path.
+memory) and tasks. A plain session's cwd is its project's path. The UI calls
+plain sessions "free sessions" (`NewSession.tsx`): Claude Code without an
+orchestrator, with a model the user picks and can switch between turns
+(`ManagedSession.setModel`), and a stored session of the folder can be resumed.
+Messages to any session can carry attachments (`Attachment`: images, PDFs, text
+files), turned into content blocks in `inputQueue.ts`. Any other file (Office
+documents, archives, text or PDFs too large to inline; up to 30 MB) is saved
+under the project's worktrees folder (`attachments.ts`, `.attachments/`, pruned
+after a month) and the session gets its path to open with its own tools.
 
 Tasks (`packages/server/src/tasks.ts`, persisted in `~/.steffe/tasks/`) are
 teams of agent sessions working in git worktrees under `~/.steffe/worktrees/`.

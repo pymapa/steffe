@@ -7,7 +7,7 @@ import { isInside, type Sandboxes } from './isolagent.js';
 import { writeFileAtomic } from './atomicWrite.js';
 import type {
   CreateTaskRequest,
-  ImageAttachment,
+  Attachment,
   Project,
   ServerEvent,
   Task,
@@ -305,7 +305,7 @@ export class TaskManager {
       ``,
       await this.rolesText(),
     ].join('\n');
-    await this.startAgent(task, 'orchestrator', { cwd: project.path, itemId: null, prompt, images: req.images });
+    await this.startAgent(task, 'orchestrator', { cwd: project.path, itemId: null, prompt, images: req.attachments });
     this.changed(task);
     return task;
   }
@@ -447,7 +447,7 @@ export class TaskManager {
    * The user writes to the orchestrator. Works in any phase but paused: a stopped orchestrator
    * (finished or cancelled task, or after a restart) is resumed with the message.
    */
-  async message(id: string, text: string, images: ImageAttachment[] = []): Promise<Task> {
+  async message(id: string, text: string, images: Attachment[] = []): Promise<Task> {
     const task = this.must(id);
     if (task.phase === 'paused') throw new Error('the task is paused: resume it first');
     const orch = task.agents.find((a) => a.role === 'orchestrator');
@@ -468,7 +468,7 @@ export class TaskManager {
    * Bring a stopped orchestrator back with its inbox, and the user's message if there is one.
    * Without one it was woken by agent messages (validators kept running after finish).
    */
-  private async reviveOrchestrator(task: Task, userText: string | null, images: ImageAttachment[] = []): Promise<void> {
+  private async reviveOrchestrator(task: Task, userText: string | null, images: Attachment[] = []): Promise<void> {
     const orch = task.agents.find((a) => a.role === 'orchestrator');
     if (!orch) return;
     const ended = !LIVE_PHASES.includes(task.phase);
@@ -788,7 +788,7 @@ export class TaskManager {
   private async startAgent(
     task: Task,
     roleName: string,
-    opts: { cwd: string; itemId: string | null; prompt: string; images?: ImageAttachment[] },
+    opts: { cwd: string; itemId: string | null; prompt: string; images?: Attachment[] },
   ): Promise<TaskAgent> {
     const role = await getRole(roleName);
     const existing = SINGLETON_ROLES.has(roleName) ? task.agents.find((a) => a.name === roleName) : undefined;
@@ -903,7 +903,7 @@ export class TaskManager {
   private async launch(
     task: Task,
     agent: TaskAgent,
-    opts: { prompt: string; resume: string | null; images?: ImageAttachment[] },
+    opts: { prompt: string; resume: string | null; images?: Attachment[] },
   ): Promise<void> {
     const role = await getRole(agent.role);
     const project = this.project(task);

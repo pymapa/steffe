@@ -13,11 +13,12 @@ import type {
   OpenProjectResult,
   CreateTaskRequest,
   CreateSessionRequest,
-  ImageAttachment,
+  Attachment,
   SetAccountRequest,
   SetSandboxResourcesRequest,
   SetFlavorRequest,
   SendMessageRequest,
+  SetModelRequest,
   ServerEvent,
 } from '@steffe/shared';
 import { SessionManager } from './sessionManager.js';
@@ -27,6 +28,7 @@ import { readFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { TaskManager, artifactsDir } from './tasks.js';
 import { readHistory } from './session.js';
+import { pruneAttachments, storeFiles } from './attachments.js';
 import { getPullRequest, listGithubAccounts, listPullRequests, routeGh } from './github.js';
 import { loadRoles } from './roles.js';
 import { createCatalogEntry, loadCatalog, saveCatalogEntry } from './catalog.js';
@@ -252,21 +254,42 @@ app.get('/api/projects/:id/prs/:number', async (c) => {
 
 // --- tasks -------------------------------------------------------------------
 
-const ATTACHMENT_TYPES = new Set<ImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
-/** The API's per-image limit is 5 MB (of base64). */
+const ATTACHMENT_TYPES = new Set<Attachment['mediaType']>([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'application/pdf',
+  'text/plain',
+  'application/octet-stream',
+]);
+/**
+ * Base64 limits: the API's 5 MB per image; PDFs and text are kept well inside its request limit.
+ * Other files go to disk, not to the API: 30 MB each.
+ */
+const MAX_BASE64: Record<string, number> = {
+  'application/pdf': 20 * 1024 * 1024,
+  'text/plain': 1024 * 1024,
+  'application/octet-stream': 40 * 1024 * 1024,
+};
 const MAX_IMAGE_BASE64 = 5 * 1024 * 1024;
 
-/** Validate message attachments. They are forwarded to the session as is, never written anywhere. */
-function parseImages(raw: unknown): ImageAttachment[] {
+/** Validate message attachments. Images, PDFs and text are forwarded to the session as is; see receiveAttachments. */
+function parseAttachments(raw: unknown): Attachment[] {
   if (raw == null) return [];
-  if (!Array.isArray(raw)) throw new Error('images must be an array');
-  return raw.map((img: Partial<ImageAttachment>, i) => {
-    if (!img || !ATTACHMENT_TYPES.has(img.mediaType!)) throw new Error(`image ${i + 1}: unsupported type ${img?.mediaType}`);
-    if (typeof img.data !== 'string' || !img.data) throw new Error(`image ${i + 1}: no data`);
-    if (img.data.length > MAX_IMAGE_BASE64) throw new Error(`image ${i + 1} is too large (max 5 MB)`);
-    return { mediaType: img.mediaType!, data: img.data, name: String(img.name || `image ${i + 1}`).slice(0, 120) };
+  if (!Array.isArray(raw)) throw new Error('attachments must be an array');
+  return raw.map((a: Partial<Attachment>, i) => {
+    if (!a || !ATTACHMENT_TYPES.has(a.mediaType!)) throw new Error(`attachment ${i + 1}: unsupported type ${a?.mediaType}`);
+    if (typeof a.data !== 'string' || !a.data) throw new Error(`attachment ${i + 1}: no data`);
+    const max = MAX_BASE64[a.mediaType!] ?? MAX_IMAGE_BASE64;
+    if (a.data.length > max) throw new Error(`attachment ${i + 1} is too large (max ${Math.round(max / 1024 / 1024)} MB)`);
+    return { mediaType: a.mediaType!, data: a.data, name: String(a.name || `attachment ${i + 1}`).slice(0, 120) };
   });
 }
+
+/** Validated attachments of a message to a session of `projectId`, with the files that go to disk saved. */
+const receiveAttachments = (raw: unknown, projectId: string): Promise<Attachment[]> =>
+  storeFiles(projectId, parseAttachments(raw));
 
 const taskAction =
   (fn: (id: string, body: unknown) => Promise<unknown>) =>
@@ -287,11 +310,13 @@ app.get('/api/roles', async (c) => c.json([...(await loadRoles()).values()].map(
 app.post('/api/tasks', async (c) => {
   const body = (await c.req.json()) as CreateTaskRequest;
   try {
-    const images = parseImages(body.images);
-    if (!body.projectId || (!body.prompt?.trim() && !images.length)) {
-      return c.json({ error: 'projectId and a prompt or an image are required' }, 400);
+    const parsed = parseAttachments(body.attachments);
+    if (!body.projectId || (!body.prompt?.trim() && !parsed.length)) {
+      return c.json({ error: 'projectId and a prompt or an attachment are required' }, 400);
     }
-    const task = await tasks.create({ ...body, prompt: body.prompt?.trim() ?? '', images });
+    if (!projects.get(body.projectId)) return c.json({ error: 'project not found' }, 400);
+    const attachments = await storeFiles(body.projectId, parsed);
+    const task = await tasks.create({ ...body, prompt: body.prompt?.trim() ?? '', attachments });
     const touched = await projects.touch(body.projectId);
     if (touched) manager.broadcast({ type: 'project.updated', project: touched });
     return c.json(task, 201);
@@ -348,12 +373,14 @@ app.post('/api/tasks/:id/complete', taskAction((id) => tasks.complete(id)));
 app.post('/api/tasks/:id/handoff', taskAction((id) => tasks.handoff(id)));
 app.post(
   '/api/tasks/:id/message',
-  taskAction((id, body) => {
+  taskAction(async (id, body) => {
     const req = body as TaskMessageRequest;
     const text = req.text?.trim() ?? '';
-    const images = parseImages(req.images);
-    if (!text && !images.length) throw new Error('text or an image is required');
-    return tasks.message(id, text, images);
+    const task = tasks.get(id);
+    if (!task) throw new Error('task not found');
+    const attachments = await receiveAttachments(req.attachments, task.projectId);
+    if (!text && !attachments.length) throw new Error('text or an attachment is required');
+    return tasks.message(id, text, attachments);
   }),
 );
 app.post(
@@ -383,13 +410,25 @@ app.delete('/api/tasks/:id', async (c) => {
 app.get('/api/sessions', (c) => c.json(manager.list().map((s) => s.summary())));
 
 app.post('/api/sessions', async (c) => {
-  const body = (await c.req.json()) as CreateSessionRequest;
-  if (!body.projectId || !body.prompt) return c.json({ error: 'projectId and prompt are required' }, 400);
+  const { attachments: rawAttachments, ...body } = (await c.req.json()) as CreateSessionRequest;
   const project = projects.get(body.projectId);
   if (!project) return c.json({ error: 'project not found' }, 404);
   let s;
   try {
-    s = manager.create(body, project.path, null, await sandboxes.session(project, body.resumeSessionId));
+    const attachments = await receiveAttachments(rawAttachments, project.id);
+    const prompt = body.prompt?.trim() ?? '';
+    if (!prompt && !attachments.length && !body.resumeSessionId) {
+      return c.json({ error: 'a prompt, an attachment or a session to resume is required' }, 400);
+    }
+    const title = body.title || prompt.slice(0, 60).replace(/\s+/g, ' ') || attachments[0]?.name;
+    // With attachments, the first message is sent after the start: the initial prompt can only be text.
+    s = manager.create(
+      { ...body, title, prompt: attachments.length ? '' : prompt },
+      project.path,
+      null,
+      await sandboxes.session(project, body.resumeSessionId),
+    );
+    if (attachments.length) s.send(prompt, attachments);
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
   }
@@ -408,9 +447,9 @@ app.post('/api/sessions/:id/messages', async (c) => {
   if (!s) return c.json({ error: 'not found' }, 404);
   const body = (await c.req.json()) as SendMessageRequest;
   try {
-    const images = parseImages(body.images);
-    if (!body.prompt && !images.length) return c.json({ error: 'prompt or an image is required' }, 400);
-    s.send(body.prompt ?? '', images);
+    const attachments = await receiveAttachments(body.attachments, s.req.projectId);
+    if (!body.prompt && !attachments.length) return c.json({ error: 'prompt or an attachment is required' }, 400);
+    s.send(body.prompt ?? '', attachments);
     return c.body(null, 204);
   } catch (err) {
     return c.json({ error: String(err) }, 409);
@@ -422,6 +461,18 @@ app.post('/api/sessions/:id/interrupt', async (c) => {
   if (!s) return c.json({ error: 'not found' }, 404);
   await s.interrupt();
   return c.body(null, 204);
+});
+
+app.put('/api/sessions/:id/model', async (c) => {
+  const s = manager.get(c.req.param('id'));
+  if (!s) return c.json({ error: 'not found' }, 404);
+  const { model } = (await c.req.json()) as SetModelRequest;
+  try {
+    await s.setModel(model || null);
+    return c.body(null, 204);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
+  }
 });
 
 app.delete('/api/sessions/:id', (c) => {
@@ -436,6 +487,8 @@ app.post('/api/permissions/:id', async (c) => {
 });
 
 // --- HTTP + WebSocket ---------------------------------------------------------
+
+void pruneAttachments();
 
 const server = createServer(getRequestListener(app.fetch));
 const wss = new WebSocketServer({ server, path: '/ws' });

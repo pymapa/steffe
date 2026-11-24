@@ -11,9 +11,10 @@ import {
   type Query,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import { attachmentsDir } from './attachments.js';
 import type {
   CreateSessionRequest,
-  ImageAttachment,
+  Attachment,
   PermissionRequest,
   ServerEvent,
   SessionDetail,
@@ -128,7 +129,7 @@ export class ManagedSession {
     private readonly sandbox: SessionSandbox | null = null,
   ) {
     this.claudeSessionId = req.resumeSessionId ?? null;
-    this.title = req.title ?? req.prompt.slice(0, 60).replace(/\s+/g, ' ');
+    this.title = req.title || req.prompt.slice(0, 60).replace(/\s+/g, ' ') || 'New session';
     this.model = req.model ?? null;
   }
 
@@ -164,6 +165,7 @@ export class ManagedSession {
       cwd: this.cwd,
       model: this.req.model,
       permissionMode: this.req.permissionMode ?? 'default',
+      allowDangerouslySkipPermissions: this.req.permissionMode === 'bypassPermissions',
       resume: this.req.resumeSessionId,
       includePartialMessages: true,
       abortController: this.abort,
@@ -194,19 +196,27 @@ export class ManagedSession {
     void this.consume();
   }
 
-  /** Images go straight to the SDK; the transcript only notes their names. */
-  send(prompt: string, images: ImageAttachment[] = []): void {
+  /** Attachments go straight to the SDK (files saved to disk as their path); the transcript only notes their names. */
+  send(prompt: string, attachments: Attachment[] = []): void {
     if (this.status === 'ended' || this.status === 'error') {
       throw new Error(`session is ${this.status}`);
     }
-    const shown = [prompt, ...images.map((img) => `📎 ${img.name}`)].filter(Boolean).join('\n');
+    const shown = [prompt, ...attachments.map((a) => `📎 ${a.name}`)].filter(Boolean).join('\n');
     this.addEntry(localUserEntry(randomUUID(), shown));
-    this.input.push(prompt, images);
+    this.input.push(prompt, attachments);
     this.setStatus('running');
   }
 
   async interrupt(): Promise<void> {
     await this.q?.interrupt();
+  }
+
+  /** Switch the model for the turns that follow. null is Claude Code's default. */
+  async setModel(model: string | null): Promise<void> {
+    if (!this.q || this.status === 'ended' || this.status === 'error') throw new Error(`session is ${this.status}`);
+    await this.q.setModel(model ?? undefined);
+    this.model = model;
+    this.addEntry(systemEntry(randomUUID(), `Model set to ${model ?? 'default'}`));
   }
 
   /** Milliseconds this session has spent working on turns, including the current one. */
@@ -281,6 +291,10 @@ export class ManagedSession {
   }
 
   private askPermission(toolName: string, input: Record<string, unknown>, signal: AbortSignal): Promise<PermissionResult> {
+    // A file the user attached is theirs to show: reading it needs no second yes.
+    if (toolName === 'Read' && input.file_path && isInside(attachmentsDir(this.req.projectId), String(input.file_path))) {
+      return Promise.resolve({ behavior: 'allow' });
+    }
     return new Promise((resolve) => {
       const request: PermissionRequest = {
         id: randomUUID(),
