@@ -1652,12 +1652,11 @@ export class TaskManager {
         throw new Error(`git push failed:\n${push.out}`);
       }
       try {
-        const footer = `\n\n---\n_${task.adoptedPr != null ? 'Updated' : 'Opened'} by Steffe task "${task.title}" · ${task.plan?.items.length ?? 0} work items · $${task.totalCostUsd.toFixed(2)} agent cost_`;
         task.prUrl = await createPullRequest(wt, {
           base: task.baseBranch,
           head: task.branch,
           title: prTitle,
-          body: report + footer,
+          body: report,
           draft,
           keepDescription: task.adoptedPr != null,
         });
