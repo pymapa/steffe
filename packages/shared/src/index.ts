@@ -398,7 +398,10 @@ export interface TaskQuestion {
 export interface Task {
   id: string;
   projectId: string;
-  /** Until the orchestrator names the task (name_task, `named`): the start of the user's request. */
+  /**
+   * Until the orchestrator names the task (name_task, `named`): the start of the user's request.
+   * Once the task has a pull request: "#<number> <PR title>", kept in step with the PR.
+   */
   title: string;
   /** The orchestrator has named the task; the branch is named after that name. */
   named?: boolean;

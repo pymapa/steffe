@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import type { ChecksState, PullRequestCheck, PullRequestDetail, PullRequestInfo, PullRequestListing } from '@steffe/shared';
 
@@ -51,7 +52,8 @@ export async function listGithubAccounts(): Promise<string[]> {
 async function gh(cwd: string, ...args: string[]): Promise<string> {
   const user = accountAt(cwd);
   const env = user ? { ...process.env, GH_TOKEN: await githubToken(user) } : undefined;
-  const { stdout } = await exec('gh', args, { cwd, env, maxBuffer: 16 * 1024 * 1024 });
+  // A checkout that is gone still says which account to use, and a PR url needs no repo.
+  const { stdout } = await exec('gh', args, { cwd: existsSync(cwd) ? cwd : undefined, env, maxBuffer: 16 * 1024 * 1024 });
   return stdout.trim();
 }
 
@@ -196,8 +198,8 @@ export interface PullRequestHead {
   isCrossRepository: boolean;
 }
 
-/** The branches of pull request `number` in the repo at `cwd`. */
-export async function pullRequestHead(cwd: string, number: number): Promise<PullRequestHead> {
+/** The branches of pull request `number` (or the one at a PR url) in the repo at `cwd`. */
+export async function pullRequestHead(cwd: string, number: number | string): Promise<PullRequestHead> {
   const fields = 'number,title,url,state,headRefName,baseRefName,isCrossRepository';
   return JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--json', fields)) as PullRequestHead;
 }

@@ -212,7 +212,10 @@ app.get('/api/projects/:id/stored-sessions', async (c) => {
 app.get('/api/projects/:id/prs', async (c) => {
   const project = projects.get(c.req.param('id'));
   if (!project) return c.json({ error: 'not found' }, 404);
-  return c.json(await listPullRequests(project.path, (branch) => tasks.taskForBranch(branch)));
+  const listing = await listPullRequests(project.path, (branch) => tasks.taskForBranch(branch));
+  // A task is named after its pull request, and follows when the PR is retitled.
+  tasks.followPrs(listing.prs);
+  return c.json(listing);
 });
 
 app.get('/api/projects/:id/catalog', async (c) => {
@@ -511,6 +514,7 @@ wss.on('connection', (ws) => {
 await projects.load();
 await sandboxes.adopt();
 await tasks.load();
+void tasks.followStoredPrs();
 // An explicit PORT (set by `npm run dev`, which also points the web proxy at
 // it) is used as is; without one, take the first free port from 4010.
 const PORT = process.env.PORT ? Number(process.env.PORT) : await findFreePort(4010);

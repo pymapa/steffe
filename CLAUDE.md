@@ -41,7 +41,9 @@ local testing until the user clicks Handoff or asks the orchestrator for it
 (`TaskManager.handoff`): the worktree is removed and the task branch checked
 out in the main checkout. In triage the orchestrator can also take over an
 existing open PR (`checkout_pr`, `Task.adoptedPr`): the PR's branch becomes
-the task branch and the task goes straight to review, without a worktree. Roles live in `roles/*.md`, shared skills in `plugin/skills/`.
+the task branch and the task goes straight to review, without a worktree. A
+task with a PR is named after it, `#<number> <PR title>`, and so are its
+agents' sessions (`TaskManager.followPr`; kept in step by the PR listing). Roles live in `roles/*.md`, shared skills in `plugin/skills/`.
 They stay project-agnostic; project knowledge comes from the target repo's
 CLAUDE.md and skills.
 

@@ -243,6 +243,42 @@ export class TaskManager {
     this.changed(task);
   }
 
+  /**
+   * A task with a pull request is named after it: "#<number> <PR title>", and so are its agents'
+   * sessions.
+   */
+  private followPr(task: Task, pr: { number: number; title: string }): void {
+    const title = `#${pr.number} ${pr.title.replace(/\s+/g, ' ').trim()}`;
+    if (task.title === title && task.named) return;
+    task.title = title;
+    task.named = true;
+    for (const a of task.agents) this.live.get(task.id)?.get(a.name)?.rename(`${a.name} · ${title}`);
+    this.changed(task);
+  }
+
+  /** Rename the tasks whose pull request is among `prs` (a fresh listing from GitHub) after it. */
+  followPrs(prs: { number: number; title: string; url: string }[]): void {
+    const byUrl = new Map(prs.map((pr) => [pr.url, pr]));
+    for (const task of this.tasks.values()) {
+      const pr = task.prUrl ? byUrl.get(task.prUrl) : undefined;
+      if (pr) this.followPr(task, pr);
+    }
+  }
+
+  /** Tasks whose pull request was opened before tasks were named after it: look it up and rename. */
+  async followStoredPrs(): Promise<void> {
+    for (const task of [...this.tasks.values()]) {
+      if (!task.prUrl || /^#\d+ /.test(task.title)) continue;
+      const project = this.projects.get(task.projectId);
+      if (!project) continue;
+      try {
+        this.followPr(task, await pullRequestHead(project.path, task.prUrl));
+      } catch {
+        // gh missing, offline or the PR is gone: the task keeps its name
+      }
+    }
+  }
+
   taskForBranch(branch: string): string | null {
     for (const t of this.tasks.values()) if (t.branch === branch) return t.id;
     return null;
@@ -585,10 +621,7 @@ export class TaskManager {
     task.baseBranch = pr.baseRefName;
     task.prUrl = pr.url;
     task.adoptedPr = pr.number;
-    if (!task.named) {
-      task.title = `#${pr.number} ${pr.title}`.slice(0, 60);
-      task.named = true;
-    }
+    this.followPr(task, pr);
     task.plan ??= { spec: `Existing pull request #${pr.number}: ${pr.title}\n\n${pr.url}`, items: [] };
     task.phase = 'review';
     // Already on it: the task works there like after a handoff.
@@ -603,13 +636,14 @@ export class TaskManager {
   private nameTask(task: Task, name: string): string {
     const title = name.replace(/\s+/g, ' ').trim();
     if (!title) throw new Error('the name is empty');
+    if (task.prUrl) throw new Error(`the task has a pull request and is named after it ("${task.title}"): to rename it, change the title of the pull request`);
     if (title.length > 30 || title.split(' ').length > 4) {
       throw new Error(`"${title}" is too long for a name: at most 4 words and 30 characters. Name the subject of the task, not the request.`);
     }
     task.title = title;
     task.named = true;
     for (const a of task.agents) this.live.get(task.id)?.get(a.name)?.rename(`${a.name} · ${title}`);
-    return task.worktreePath || task.handedOff || task.adoptedPr != null
+    return task.worktreePath || task.handedOff
       ? `The task is now called "${title}". Its branch stays ${task.branch}.`
       : `The task is now called "${title}".`;
   }
@@ -1664,6 +1698,12 @@ export class TaskManager {
         task.phase = 'executing';
         const e = err as { stderr?: string; message: string };
         throw new Error(`gh pr create failed: ${(e.stderr || e.message).trim()}`);
+      }
+      // The task is named after its PR from here on. An adopted PR kept its own title, so ask.
+      try {
+        this.followPr(task, await pullRequestHead(wt, task.prUrl));
+      } catch (err) {
+        console.error(`[steffe] could not name "${task.title}" after its pull request:`, err);
       }
       result = task.adoptedPr != null ? `Pushed to the pull request and posted the report as a comment: ${task.prUrl}` : `Pull request opened: ${task.prUrl}`;
     }

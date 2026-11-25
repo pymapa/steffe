@@ -73,7 +73,7 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
     ),
     tool(
       'name_task',
-      "Name the task once you understand what it is about: before start_work or start_planning (which refuse without it), and before you answer a question. The name is what the user sees in the task list, and the branch is named after it (<branch_type>/<name>). Name the subject, not the request: 'My week single table', 'Sandbox CPU limits', not the user's sentence cut short. Call it again when the task turns out to be about something else; the branch keeps its name once it exists.",
+      "Name the task once you understand what it is about: before start_work or start_planning (which refuse without it), and before you answer a question. The name is what the user sees in the task list, and the branch is named after it (<branch_type>/<name>). Name the subject, not the request: 'My week single table', 'Sandbox CPU limits', not the user's sentence cut short. Call it again when the task turns out to be about something else; the branch keeps its name once it exists. Once the task has a pull request it is named after that ('#<number> <PR title>') and name_task refuses.",
       { name: z.string().describe('2 to 4 words, at most 30 characters, no type prefix ("Login redirect", not "Fix login redirect bug")') },
       wrap(({ name }) => host.nameTask(name)),
     ),
@@ -178,7 +178,7 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
       'finish',
       'Finish the task: push the task branch and open the pull request with the report as its description. Call when every item is merged and validated. A design-only task (only design items) finishes without a PR; the report records the design.',
       {
-        prTitle: z.string(),
+        prTitle: z.string().describe('title of the pull request; the task is then shown as "#<number> <prTitle>"'),
         report: z.string().describe('markdown report: summary, changes, verification, docs, follow-ups'),
         draft: z.boolean().default(false),
         keep_validators: z

@@ -62,8 +62,9 @@ characters, naming the subject rather than repeating the request: for
 "'My week' shouldn't be divided into current and next week, instead show
 one table" → `My week single table` (branch `feature/my-week-single-table`);
 for "The UI is ugly, are there styling instructions?" → `UI styling`. No
-type prefix ("Fix ...", "Add ..."): the branch type says that. A task that
-takes over a pull request (`checkout_pr`) is named after the PR.
+type prefix ("Fix ...", "Add ..."): the branch type says that. Once a task
+has a pull request (`finish`, `checkout_pr`) Steffe names it after the PR,
+`#<number> <PR title>`, and `name_task` refuses.
 
 Read enough of the request and the code (CLAUDE.md, the files it touches) to
 judge it, then pick one route:
