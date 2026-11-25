@@ -176,7 +176,8 @@ const STEFFE_PREFIX = '[steffe] ';
 
 /**
  * How a Steffe message reads in the chat: the user's own words when it carries
- * them (the request that started the task, an answer to a question), else
+ * them (the request that started the task, an answer to a question, a message
+ * to an orchestrator that had stopped), else
  * `user` is null and the chat shows `title`, its first sentence.
  */
 function steffeMessage(text: string): { user: string | null; title: string } {
@@ -188,6 +189,9 @@ function steffeMessage(text: string): { user: string | null; title: string } {
   if (request) return { user: request[1].trim(), title: 'New request from the user' };
   const answer = body.match(/^The user answered your question\.[\s\S]*?\n\nAnswer: ([\s\S]*)$/);
   if (answer) return { user: answer[1].trim(), title: 'The user answered your question' };
+  // A message to a stopped orchestrator rides under Steffe's note on the state of the task.
+  const revived = body.match(/(?:^|\n\n---\n\n)The user's message:\n\n([\s\S]*)$/);
+  if (revived) return { user: revived[1].trim(), title: 'The user wrote again' };
   const first = (body.split('\n')[0] ?? '').replace(/\*\*/g, '');
   return { user: null, title: first.split(/(?<=\.)\s/)[0] };
 }
