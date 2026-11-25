@@ -55,6 +55,9 @@ accepts it in the UI; it is stored on the project (`setup` in projects.json)
 and each task agent gets its role's wiring appended to its system prompt.
 The setup agent stays alive after Accept, and writes a suggested skill, agent
 or CLAUDE.md note into the main checkout when the user asks it to (uncommitted).
+The user can write to it at any later time (`ProjectSetupManager.message`): when
+none is live, one is started that resumes the last conversation
+(`setupSessionId`), or is told the setup in use when that is gone.
 
 Retros (`packages/server/src/retro.ts`): when the orchestrator has finished a
 round (`finish`, and every validator kept running past it has stopped), a

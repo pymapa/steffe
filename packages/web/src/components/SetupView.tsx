@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type {
+  Attachment,
   CatalogEntry,
   PermissionRequest,
   Project,
@@ -11,7 +12,7 @@ import type {
 } from '@steffe/shared';
 import { api } from '../lib/api';
 import { Markdown } from './Markdown';
-import { SessionView } from './SessionView';
+import { Composer, SessionView } from './SessionView';
 import { useResizable } from '../lib/useResizable';
 
 interface Props {
@@ -58,6 +59,8 @@ export function SetupView({ project, catalog, session, transcripts, permissions,
       setBusy(false);
     }
   };
+
+  const send = (text: string, attachments: Attachment[]) => api.messageSetup(project.id, text, attachments);
 
   const running = session && (session.status === 'starting' || session.status === 'running');
   const shown = showing === 'proposal' ? proposal : accepted;
@@ -142,11 +145,27 @@ export function SetupView({ project, catalog, session, transcripts, permissions,
               transcript={transcripts[session.id] ?? []}
               permissions={permissions.filter((p) => p.sessionId === session.id)}
               compact
+              // An agent that has stopped is brought back by the message.
+              onSend={send}
+              canSend
             />
           </section>
         </div>
       ) : (
-        <div className="task-body single">{left}</div>
+        <div className="task-body" style={{ '--task-left': leftW.css } as React.CSSProperties}>
+          <div className="resize-handle at-task-left" {...leftW.handleProps} />
+          {left}
+          <section className="task-right">
+            <div className="session-view compact">
+              <div className="muted pad setup-idle">
+                {accepted || proposal
+                  ? 'The setup agent is not running. Write to it to change the setup, ask about it, or have it write a skill, an agent or a CLAUDE.md note it suggested: it picks up where you left off.'
+                  : 'Write to the setup agent to tell it what you want from the setup, or use Analyze project for a full proposal.'}
+              </div>
+              <Composer onSend={send} disabledReason={null} />
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );

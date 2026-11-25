@@ -45,6 +45,12 @@ export const api = {
   analyzeSetup: (projectId: string) => request<SessionSummary>(`/api/projects/${projectId}/setup/analyze`, { method: 'POST' }),
   acceptSetup: (projectId: string) => request<Project>(`/api/projects/${projectId}/setup/accept`, { method: 'POST' }),
   dismissSetup: (projectId: string) => request<Project>(`/api/projects/${projectId}/setup/dismiss`, { method: 'POST' }),
+  /** Write to the project's setup agent; one is started (resuming its last conversation) when none is live. */
+  messageSetup: (projectId: string, prompt: string, attachments: Attachment[] = []) =>
+    request<SessionSummary>(`/api/projects/${projectId}/setup/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ prompt, attachments }),
+    }),
   clearSetup: (projectId: string) => request<Project>(`/api/projects/${projectId}/setup`, { method: 'DELETE' }),
   listFlavors: (projectId: string) => request<FlavorListing>(`/api/isolagent/flavors?projectId=${projectId}`),
   setFlavor: (projectId: string, flavor: string | null) =>

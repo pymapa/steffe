@@ -103,6 +103,18 @@ app.post('/api/projects/:id/setup/analyze', setupAction((id) => setup.analyze(id
 app.post('/api/projects/:id/setup/accept', setupAction((id) => setup.accept(id)));
 app.post('/api/projects/:id/setup/dismiss', setupAction((id) => setup.dismiss(id)));
 app.delete('/api/projects/:id/setup', setupAction((id) => setup.clear(id)));
+app.post('/api/projects/:id/setup/messages', async (c) => {
+  const id = c.req.param('id');
+  const body = (await c.req.json()) as SendMessageRequest;
+  try {
+    const attachments = await receiveAttachments(body.attachments, id);
+    if (!body.prompt && !attachments.length) return c.json({ error: 'prompt or an attachment is required' }, 400);
+    return c.json(await setup.message(id, body.prompt ?? '', attachments));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: msg }, msg === 'project not found' ? 404 : 409);
+  }
+});
 
 app.delete('/api/projects/:id', async (c) => {
   const id = c.req.param('id');

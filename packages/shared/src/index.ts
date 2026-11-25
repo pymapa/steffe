@@ -24,6 +24,8 @@ export interface Project {
   setup?: ProjectSetup | null;
   /** The setup agent's latest proposal, waiting for the user to accept or dismiss it. */
   setupProposal?: ProjectSetup | null;
+  /** Claude Code session id of the project's latest setup agent: resumed when the user writes to it again. */
+  setupSessionId?: string | null;
   /**
    * isolagent flavor the project's sessions run in (a microVM); null: on this machine.
    * Undefined until the user has chosen. A new project's setup agent waits for that choice.

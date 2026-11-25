@@ -471,6 +471,7 @@ body.resizing iframe { pointer-events: none; }
 
 /* Project setup: how Steffe roles use the project's agents and skills */
 .setup-entry { padding-top: 0; }
+.setup-idle { flex: 1; }
 .task-body.single { grid-template-columns: minmax(0, 1fr); }
 .task-body.single .task-left { border-right: none; }
 .setup-detail { max-width: 860px; }

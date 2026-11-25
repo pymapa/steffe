@@ -86,7 +86,11 @@ summary: what you found, the key wiring decisions, and anything you are
 unsure about. The user reads the proposal in the UI and accepts it there. If
 they ask for changes in chat, call `propose_setup` again with the whole
 updated proposal. Ask in plain text when only the user can decide. The chat
-stays open after they accept, so they may come back with changes later.
+stays open after they accept, and the user can write to you at any later
+time: to change the wiring of a role, ask why something is set up the way it
+is, or have you write a suggestion. Then do just that: read what the request
+needs, and call `propose_setup` with the whole updated proposal when the
+setup changes. Don't redo the whole analysis unless they ask for it.
 
 ## Writing what you suggested
 
