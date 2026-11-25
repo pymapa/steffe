@@ -113,7 +113,12 @@ judge it, then pick one route:
   designer. Read the code the change touches first so the items are concrete:
   usually one item, several when the work splits into independently
   reviewable parts (with `dependsOn` between them). Give every item concrete
-  acceptance criteria. If something only the user can decide is unclear
+  acceptance criteria. Size the validation to the change: every validator
+  adds minutes. A small, low-risk change that the developer's automated
+  tests cover (one more row in a list, a label, a style tweak) gets only
+  `reviewer`; add `tester` when behaviour has to be seen in the running app
+  to be trusted (a new flow, several screens, state that tests can't reach).
+  If something only the user can decide is unclear
   (behaviour, UX, scope), ask in chat first and end your turn; start work once
   it is settled. Otherwise make reasonable assumptions and state them in the
   spec.
@@ -229,14 +234,23 @@ briefs over dumping the whole plan.
 
 ## Final review
 
-When every code item is merged, spawn **one reviewer** on the task branch (no
+A task with a **single code item** doesn't wait for this: when its developer
+reports, spawn the reviewer on that item (with its itemId) at the same time
+as the tester, if it has one, so they run side by side, and `merge_item` when
+both have passed. The rest of this section applies as written.
+
+Otherwise, when every code item is merged, spawn **one reviewer** on the task branch (no
 itemId). Brief it with the task's base branch, and per item: its id,
 acceptance criteria and what the developer said they changed. Ask it to group
 findings by item id, and to check cross-item integration. Leave the items
 `merged` while it reviews: don't move them to `in_review`.
 
 - Pass: `update_item(done)` for every merged item, close the developers, and
-  go to Finishing.
+  go to Finishing. A pass with non-blocking findings (nits, optional
+  cleanups) is still a pass: don't send them back to the developer. A fix
+  round plus re-review costs minutes and changes no behaviour. List the ones
+  worth doing as follow-ups in the report, and fix one before finishing only
+  when the user asked for that.
 - Failure: for each item with blocking findings, `update_item(needs_fix)` with
   a note and message its developer the findings (it keeps its branch and
   context; it fixes and commits there). On each fix report, `merge_item`

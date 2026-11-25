@@ -5,11 +5,58 @@ import { Markdown } from './Markdown';
 
 const min = (ms: number) => `${Math.round(ms / 60_000)} min`;
 
+/** The retro as markdown, for pasting into a Claude Code session that works on Steffe or the project. */
+function retroMarkdown(r: RetroRecord): string {
+  const m = r.metrics;
+  const lines = [
+    `# Steffe retro: ${r.taskTitle}`,
+    `Project ${r.projectName} · round ${r.round} · ${new Date(r.createdAt).toLocaleString()} · rated **${r.analysis.rating}**`,
+    '',
+    r.analysis.summary,
+    '',
+    `## Findings (${r.analysis.findings.length})`,
+  ];
+  r.analysis.findings.forEach((f, i) => {
+    const meta = [f.agent, f.itemId, f.minutes != null ? `~${f.minutes} min` : null].filter(Boolean).join(' · ');
+    lines.push('', `### ${i + 1}. [${f.kind}] ${f.title}${meta ? ` (${meta})` : ''}`, '', f.detail);
+    if (f.suggestion) lines.push('', `**Suggestion:** ${f.suggestion}`);
+  });
+  if (!r.analysis.findings.length) lines.push('', 'None.');
+  if (r.analysis.wentWell.length) lines.push('', '## Went well', '', ...r.analysis.wentWell.map((w) => `- ${w}`));
+  lines.push(
+    '',
+    '## Numbers',
+    '',
+    `${min(m.wallMs)} wall time · ${min(m.activeMs)} agent work · $${m.costUsd.toFixed(2)} · ${m.fixRounds} fix rounds · ${m.toolCalls} tool calls, ${m.toolErrors} errors`,
+    '',
+    '| Agent | Item | Active | Cost | Queued | Calls | Errors | Outcome |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...m.agents.map(
+      (a) =>
+        `| ${a.name} | ${a.itemId ?? ''} | ${min(a.activeMs)} | $${a.costUsd.toFixed(2)} | ${a.waitMs != null && a.waitMs > 60_000 ? min(a.waitMs) : ''} | ${a.toolCalls} | ${a.toolErrors || ''} | ${a.outcome ?? ''} |`,
+    ),
+  );
+  if (m.slowest.length) {
+    lines.push('', '## Slowest tool calls', '', ...m.slowest.map((s) => `- ${s.seconds}s ${s.agent} · ${s.tool}: \`${s.summary.replace(/`/g, "'")}\``));
+  }
+  return lines.join('\n') + '\n';
+}
+
 /** The task's latest retro: what the facilitator found, and the numbers Steffe measured. */
 export function RetroView({ task, canRun }: { task: Task; canRun: boolean }) {
   const [record, setRecord] = useState<RetroRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const retro = task.retro;
+  const [copied, setCopied] = useState(false);
+  const copy = (r: RetroRecord) => {
+    navigator.clipboard
+      .writeText(retroMarkdown(r))
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((e) => setError(`could not copy: ${String(e)}`));
+  };
 
   useEffect(() => {
     setRecord(null);
@@ -39,6 +86,9 @@ export function RetroView({ task, canRun }: { task: Task; canRun: boolean }) {
             <span className="muted">
               round {record.round} · {new Date(record.createdAt).toLocaleString()} · retro cost ${record.facilitator.costUsd.toFixed(2)}
             </span>
+            <button className="small" onClick={() => copy(record)} title="Copy the whole retro as markdown, to paste into a Claude session">
+              {copied ? 'Copied' : 'Copy'}
+            </button>
             {runButton}
           </div>
           <Markdown>{record.analysis.summary}</Markdown>
