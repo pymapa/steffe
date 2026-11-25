@@ -515,7 +515,7 @@ export class TaskManager {
       ? null
       : userText != null
         ? `[steffe] The task is ${task.phase}${task.handedOff ? ` and handed off: the user's main checkout is on ${task.handedOff} and the task worktree is gone` : ''}. ${working.length ? `Still running: ${working.map((a) => a.name).join(', ')}.` : 'No other agents are running.'} The user is writing to you again: answer in chat.${FINISHED_PHASES.includes(task.phase) ? reopen : ''}`
-        : `[steffe] The task is ${task.phase}. Messages arrived while you were stopped (below), most likely reports from validators you kept running after finish. Tell the user the outcome in chat, briefly. If a validator found problems, say what you propose; add_items reopens the task when the user wants them fixed (or right away if they asked you to fix whatever validation finds).`;
+        : `[steffe] The task is ${task.phase}. Messages arrived while you were stopped (below), most likely reports from validators you kept running after finish. Tell the user the outcome in chat, in a line. If a validator found problems, say what you propose; add_items reopens the task when the user wants them fixed (or right away if they asked you to fix whatever validation finds).`;
     const parts = [...(header ? [header] : []), ...task.inbox.splice(0)];
     if (userText != null) parts.push(parts.length ? `The user's message:\n\n${userText}` : userText);
     if (!parts.length) return;
@@ -1423,7 +1423,7 @@ export class TaskManager {
         `Explore the codebase, draft the plan with update_plan, and call report when it is ready for the user's approval.`,
       ].join('\n'),
     });
-    return 'The planner is working. Its questions and its report arrive as [steffe] messages: ask the user in chat and relay the answers with message_agent("planner", ...). Tell the user briefly that planning has started, then end your turn.';
+    return 'The planner is working. Its questions and its report arrive as [steffe] messages: ask the user in chat and relay the answers with message_agent("planner", ...). Reply "Planning." and end your turn.';
   }
 
   private setPlan(task: Task, spec: string, items: PlanItemInput[]): void {
@@ -1712,7 +1712,7 @@ export class TaskManager {
     const still = kept.length
       ? `\nStill validating: ${kept.map((a) => this.who(task, a)).join(', ')}. Their reports wake you in review: tell the user the outcome; if they found problems, propose the fixes (add_items reopens the task).`
       : '';
-    return `${result}\nThe task is now in review: the user tests it and may ask you for changes (add_items reopens the task).${still} Reply with a one-line summary and stop.`;
+    return `${result}\nThe task is now in review: the user tests it and may ask you for changes (add_items reopens the task).${still} Reply with the PR link and, in a line, anything not verified or not included; nothing else.`;
   }
 
   /**

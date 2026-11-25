@@ -102,6 +102,10 @@ label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); fo
 .entry { display: grid; grid-template-columns: 72px 1fr; gap: 12px; }
 .entry-role { color: var(--muted); font-family: var(--mono); font-size: 11px; text-transform: uppercase; padding-top: 3px; }
 .entry-user .entry-role { color: var(--accent); }
+/* What the agent says to the user stands out from what it says while working. */
+.entry.to-user { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 8px 10px 8px 9px; margin-left: -12px; }
+.entry.to-user .entry-role { color: var(--accent); font-weight: 600; }
+.entry.aside .entry-body { color: var(--muted); font-size: 0.93em; }
 .entry-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .block-text { white-space: pre-wrap; word-break: break-word; }
 .block-tool { border-left: 2px solid var(--border); padding-left: 10px; }

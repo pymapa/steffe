@@ -84,6 +84,12 @@ interface ChatMessage {
   /** notice: a one-line stand-in for a Steffe message; its full text is in the event flow. */
   role: 'user' | 'assistant' | 'notice';
   text: string;
+  /**
+   * An assistant message meant for the user: the text that ends a turn, or a question asked
+   * with ask_user. Text followed by more tool calls is the agent thinking aloud.
+   */
+  toUser?: boolean;
+  question?: boolean;
 }
 
 type FlowEvent =
@@ -102,6 +108,8 @@ function split(entries: TranscriptEntry[]): { chat: ChatMessage[]; events: FlowE
   const chat: ChatMessage[] = [];
   const events: FlowEvent[] = [];
   const tools = new Map<string, Extract<FlowEvent, { kind: 'tool' }>>();
+  /** The latest assistant text no tool call has followed yet. */
+  let closing: ChatMessage | null = null;
 
   for (const e of entries) {
     if (e.role === 'system') {
@@ -110,6 +118,7 @@ function split(entries: TranscriptEntry[]): { chat: ChatMessage[]; events: FlowE
       continue;
     }
     const texts: string[] = [];
+    let toolAfterText = false;
     e.blocks.forEach((b, i) => {
       const key = `${e.id}:${i}`;
       switch (b.type) {
@@ -123,6 +132,14 @@ function split(entries: TranscriptEntry[]): { chat: ChatMessage[]; events: FlowE
           const ev = { kind: 'tool' as const, key, at: e.timestamp, name: b.name, input: b.input, result: null };
           tools.set(b.id, ev);
           events.push(ev);
+          // The turn goes on: what was said before this was not its closing message.
+          if (closing) closing.toUser = false;
+          closing = null;
+          if (texts.length) toolAfterText = true;
+          const question = b.name.endsWith('ask_user') ? (b.input as { question?: unknown } | null)?.question : null;
+          if (typeof question === 'string' && question.trim()) {
+            chat.push({ id: key, role: 'assistant', text: question, toUser: true, question: true });
+          }
           break;
         }
         case 'tool_result': {
@@ -140,6 +157,13 @@ function split(entries: TranscriptEntry[]): { chat: ChatMessage[]; events: FlowE
       const m = steffeMessage(text);
       chat.push(m.user !== null ? { id: e.id, role: 'user', text: m.user } : { id: e.id, role: 'notice', text: m.title });
       events.push({ kind: 'steffe', key: e.id, at: e.timestamp, title: m.title, text });
+    } else if (e.role === 'assistant') {
+      const message: ChatMessage = { id: e.id, role: 'assistant', text, toUser: !toolAfterText };
+      // A question asked in the same entry comes after the text that preceded it.
+      const at = toolAfterText ? chat.findIndex((c) => c.id.startsWith(`${e.id}:`)) : -1;
+      if (at >= 0) chat.splice(at, 0, message);
+      else chat.push(message);
+      if (message.toUser) closing = message;
     } else {
       chat.push({ id: e.id, role: e.role, text });
     }
@@ -175,8 +199,8 @@ function Chat({ entries }: { entries: ChatMessage[] }) {
   return (
     <div className="transcript">
       {entries.map((e) => (
-        <div key={e.id} className={`entry entry-${e.role}`}>
-          <div className="entry-role">{e.role === 'notice' ? 'steffe' : e.role}</div>
+        <div key={e.id} className={`entry entry-${e.role} ${e.toUser ? 'to-user' : e.role === 'assistant' ? 'aside' : ''}`}>
+          <div className="entry-role">{e.role === 'notice' ? 'steffe' : e.question ? 'question' : e.toUser ? 'to you' : e.role}</div>
           <div className="entry-body">
             {e.role === 'assistant' ? (
               <Markdown>{e.text}</Markdown>
