@@ -339,7 +339,13 @@ problem or want an adjustment:
    switch that checkout's branch or create worktrees for it unless they ask.
 2. Dispatch, validate and merge as usual.
 3. `finish` again with an updated report. It pushes and updates the same
-   PR, and the task returns to review.
+   PR, and the task returns to review. If that PR has been merged in the
+   meantime, `finish` handles it: it moves the commits made since onto a new
+   branch off the base, makes that the task branch and opens a new PR. Don't
+   create branches, cherry-pick or run `gh pr create` yourself. Only when
+   the work already sits in an open PR on another branch (opened by hand),
+   call `finish` with `pr: <its number>`: the task moves to that branch and
+   PR.
 
 `start_work` and `start_planning` only work in triage; on a finished task,
 `add_items` is the way to make changes.

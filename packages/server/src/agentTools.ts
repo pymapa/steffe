@@ -23,7 +23,7 @@ export interface ToolHost {
   mergeItem(itemId: string): Promise<string>;
   taskStatus(): Promise<string>;
   askUser(question: string, images: string[], links: { label: string; url: string }[]): Promise<string>;
-  finish(prTitle: string, report: string, draft: boolean, keepValidators: boolean): Promise<string>;
+  finish(prTitle: string, report: string, draft: boolean, keepValidators: boolean, pr: number | null): Promise<string>;
   report(outcome: string, summary: string): Promise<string>;
   askOrchestrator(question: string): Promise<string>;
 }
@@ -176,7 +176,7 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
     ),
     tool(
       'finish',
-      'Finish the task: push the task branch and open the pull request with the report as its description. Call when every item is merged and validated. A design-only task (only design items) finishes without a PR; the report records the design.',
+      "Finish the task: push the task branch and open the pull request with the report as its description (or update the task's open one). Call when every item is merged and validated. When the task's earlier pull request has been merged in the meantime, finish moves the commits made since onto a new branch off the base and opens a new pull request for them: don't do that by hand. A design-only task (only design items) finishes without a PR; the report records the design.",
       {
         prTitle: z.string().describe('title of the pull request; the task is then shown as "#<number> <prTitle>"'),
         report: z.string().describe('markdown report: summary, changes, verification, docs, follow-ups'),
@@ -187,8 +187,16 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
           .describe(
             'only when the user asked to wrap up now: reviewers/testers still running keep going after the PR is opened instead of blocking finish; their reports wake you in review',
           ),
+        pr: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "only when the task's work is already in an open pull request on another branch than the task's (one you or the user opened by hand): its number. The task moves to that branch and PR, and the report is posted there as a comment",
+          ),
       },
-      wrap(({ prTitle, report, draft, keep_validators }) => host.finish(prTitle, report, draft, keep_validators)),
+      wrap(({ prTitle, report, draft, keep_validators, pr }) => host.finish(prTitle, report, draft, keep_validators, pr ?? null)),
     ),
     tool(
       'ask_orchestrator',

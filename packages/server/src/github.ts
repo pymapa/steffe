@@ -196,11 +196,13 @@ export interface PullRequestHead {
   baseRefName: string;
   /** Its branch lives in a fork, not in this repo. */
   isCrossRepository: boolean;
+  /** The commit its branch is at (for a merged PR: was at when it merged). */
+  headRefOid: string;
 }
 
 /** The branches of pull request `number` (or the one at a PR url) in the repo at `cwd`. */
 export async function pullRequestHead(cwd: string, number: number | string): Promise<PullRequestHead> {
-  const fields = 'number,title,url,state,headRefName,baseRefName,isCrossRepository';
+  const fields = 'number,title,url,state,headRefName,baseRefName,isCrossRepository,headRefOid';
   return JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--json', fields)) as PullRequestHead;
 }
 

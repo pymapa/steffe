@@ -1364,7 +1364,7 @@ export class TaskManager {
           t.phase = 'escalated';
           return 'Question sent to the user. End your turn now; the answer will arrive as a [steffe] message.';
         }),
-      finish: (prTitle, report, draft, keepValidators) => run((t) => this.finish(t, prTitle, report, draft, keepValidators)),
+      finish: (prTitle, report, draft, keepValidators, pr) => run((t) => this.finish(t, prTitle, report, draft, keepValidators, pr)),
       askOrchestrator: (question) =>
         run((t) => {
           const agent = t.agents.find((a) => a.name === caller)!;
@@ -1636,7 +1636,7 @@ export class TaskManager {
       .join('\n');
   }
 
-  private async finish(task: Task, prTitle: string, report: string, draft: boolean, keepValidators: boolean): Promise<string> {
+  private async finish(task: Task, prTitle: string, report: string, draft: boolean, keepValidators: boolean, pr: number | null = null): Promise<string> {
     const project = this.project(task);
     const open = (task.plan?.items ?? []).filter((i) => i.status !== 'merged' && i.status !== 'done');
     if (open.length) throw new Error(`items not merged yet: ${open.map((i) => `${i.id} [${i.status}]`).join(', ')}`);
@@ -1654,6 +1654,7 @@ export class TaskManager {
     const wt = this.worktree(task);
     const dirty = await statusPorcelain(wt);
     if (dirty) throw new Error(`the task worktree has uncommitted changes:\n${dirty}`);
+    const moved = pr != null ? await this.moveToPr(task, wt, pr) : await this.leaveMergedPr(task, wt);
     const base = (await tryGit(wt, 'rev-parse', '--verify', `origin/${task.baseBranch}`)).ok
       ? `origin/${task.baseBranch}`
       : task.baseBranch;
@@ -1707,12 +1708,101 @@ export class TaskManager {
       }
       result = task.adoptedPr != null ? `Pushed to the pull request and posted the report as a comment: ${task.prUrl}` : `Pull request opened: ${task.prUrl}`;
     }
+    if (moved) result = `${moved}\n${result}`;
 
     await this.windDown(task, project, kept);
     const still = kept.length
       ? `\nStill validating: ${kept.map((a) => this.who(task, a)).join(', ')}. Their reports wake you in review: tell the user the outcome; if they found problems, propose the fixes (add_items reopens the task).`
       : '';
     return `${result}\nThe task is now in review: the user tests it and may ask you for changes (add_items reopens the task).${still} Reply with the PR link and, in a line, anything not verified or not included; nothing else.`;
+  }
+
+  /** Check `branch` out where the task works, and make it the task branch. */
+  private async switchTaskBranch(task: Task, wt: string, branch: string, create?: { from: string }): Promise<void> {
+    const res = create
+      ? await tryGit(wt, 'checkout', '-b', branch, create.from)
+      : await tryGit(wt, 'checkout', branch);
+    if (!res.ok) {
+      const elsewhere = /already (?:checked out|used by worktree) at/.test(res.out);
+      throw new Error(
+        `could not check out ${branch} in ${wt}:\n${res.out}${elsewhere ? '\nRemove that worktree (git worktree remove <path>) and call finish again.' : ''}`,
+      );
+    }
+    if (task.handedOff) task.handedOff = branch;
+    task.branch = branch;
+  }
+
+  /**
+   * finish, when the task's pull request has been merged since it was opened: the task branch
+   * still carries everything that was merged, so the commits made after it move onto a new
+   * branch off the base, which becomes the task branch and gets a pull request of its own.
+   * Returns a note for the orchestrator, or '' when the task's PR is not merged.
+   */
+  private async leaveMergedPr(task: Task, wt: string): Promise<string> {
+    if (!task.prUrl) return '';
+    const merged = await pullRequestHead(wt, task.prUrl).catch(() => null);
+    if (merged?.state !== 'MERGED') return '';
+    const old = task.branch;
+    const byHand = `put the work on a new branch from origin/${task.baseBranch} and open its pull request with gh, then call finish with \`pr\`: that pull request's number`;
+    if (!(await tryGit(wt, 'merge-base', '--is-ancestor', merged.headRefOid, old)).ok) {
+      throw new Error(`PR #${merged.number} is merged, and ${old} no longer contains the commit it was merged at (${merged.headRefOid.slice(0, 8)}), so Steffe cannot tell which commits are new. Have a developer ${byHand}.`);
+    }
+    const fresh = await commitsAhead(wt, merged.headRefOid, old);
+    if (!fresh) throw new Error(`PR #${merged.number} is merged and ${old} has no commits since: there is nothing to open a pull request for`);
+    const fetched = await tryGit(wt, 'fetch', 'origin', task.baseBranch);
+    if (!fetched.ok) throw new Error(`git fetch origin ${task.baseBranch} failed:\n${fetched.out}`);
+
+    let branch = '';
+    for (let n = 2; !branch; n++) {
+      const name = `${old.replace(/-\d+$/, '')}-${n}`;
+      const taken =
+        (await tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/heads/${name}`)).ok ||
+        (await tryGit(wt, 'ls-remote', '--exit-code', '--heads', 'origin', name)).ok;
+      if (!taken) branch = name;
+    }
+    await this.switchTaskBranch(task, wt, branch, { from: old });
+    const rebased = await tryGit(wt, 'rebase', '--onto', `origin/${task.baseBranch}`, merged.headRefOid);
+    if (!rebased.ok) {
+      await tryGit(wt, 'rebase', '--abort');
+      await this.switchTaskBranch(task, wt, old);
+      await tryGit(wt, 'branch', '-D', branch);
+      throw new Error(
+        `PR #${merged.number} is merged, and the ${fresh} commit(s) made since do not apply cleanly on origin/${task.baseBranch}:\n${rebased.out}\nNothing was changed. Have a developer ${byHand}.`,
+      );
+    }
+    task.prUrl = null;
+    task.adoptedPr = undefined;
+    return `PR #${merged.number} was already merged, so the ${fresh} commit(s) made since are now on a new branch off origin/${task.baseBranch}, ${branch}, which is the task branch from here on${task.handedOff ? " (the user's checkout is on it)" : ''}. ${old} is left as it was.`;
+  }
+
+  /**
+   * finish with `pr`: the task's work is already in an open pull request on another branch
+   * (opened by hand). The task takes that branch and pull request over.
+   */
+  private async moveToPr(task: Task, wt: string, number: number): Promise<string> {
+    const pr = await pullRequestHead(wt, number).catch((err: { stderr?: string; message: string }) => {
+      throw new Error(`gh pr view ${number} failed: ${(err.stderr || err.message).trim()}`);
+    });
+    if (pr.state !== 'OPEN') throw new Error(`PR #${number} is ${pr.state.toLowerCase()}: finish can only move the task to an open pull request`);
+    if (pr.isCrossRepository) throw new Error(`PR #${number} comes from a fork: its branch is not in this repo`);
+    const head = pr.headRefName;
+    const owner = [...this.tasks.values()].find((t) => t !== task && t.branch === head && (t.worktreePath || t.handedOff || t.prUrl));
+    if (owner) throw new Error(`PR #${number} (${head}) belongs to the Steffe task "${owner.title}"`);
+    const old = task.branch;
+    if (head !== old) {
+      const fetched = await tryGit(wt, 'fetch', 'origin', head);
+      if (!fetched.ok) throw new Error(`git fetch origin ${head} failed:\n${fetched.out}`);
+      if (!(await tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/heads/${head}`)).ok) {
+        await git(wt, 'branch', '--track', head, `origin/${head}`);
+      }
+      await this.switchTaskBranch(task, wt, head);
+    }
+    task.baseBranch = pr.baseRefName;
+    task.prUrl = pr.url;
+    task.adoptedPr = pr.number;
+    return head === old
+      ? ''
+      : `The task moved from ${old} to ${head}, the branch of PR #${number}${task.handedOff ? " (the user's checkout is on it now)" : ''}. ${old} is left as it was.`;
   }
 
   /**
