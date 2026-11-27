@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 
 interface Props {
-  images: { src: string; name: string }[];
+  images: { src: string; name: string; caption?: string }[];
   index: number;
   onIndex: (index: number) => void;
   onClose: () => void;
@@ -34,7 +34,9 @@ export function ImageLightbox({ images, index, onIndex, onClose, chosen, onToggl
   return (
     <div className="lightbox" onClick={onClose}>
       <div className="lightbox-bar" onClick={(e) => e.stopPropagation()}>
-        <span className="lightbox-name" title={image.name}>{image.name}</span>
+        <span className="lightbox-name" title={image.name}>
+          {image.caption ? <><strong>{image.caption}</strong> <span className="muted">{image.name}</span></> : image.name}
+        </span>
         {count > 1 && <span className="muted">{index + 1} / {count}</span>}
         {onToggleChosen && (
           <button className={isChosen ? 'primary' : ''} title="Choose this design (Enter)" onClick={() => onToggleChosen(image.name)}>

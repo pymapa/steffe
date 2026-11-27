@@ -75,7 +75,8 @@ Call `report` with `success` and:
   (`http://localhost:$PORT/...`), one per mocked page or state, each with a
   label; the user opens these in their browser;
 - the design decisions you made and the alternatives you considered, as
-  questions the user may want to weigh in on;
+  questions the user may want to weigh in on, each naming the screenshots
+  that show it (the user sees them next to the question);
 - what is mocked (files, marked `STEFFE-MOCK`) and what a developer will
   need to build for real;
 - your branch name and latest commit.

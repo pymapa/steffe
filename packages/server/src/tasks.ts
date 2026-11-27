@@ -8,6 +8,7 @@ import { writeFileAtomic } from './atomicWrite.js';
 import type {
   CreateTaskRequest,
   Attachment,
+  DesignSection,
   Project,
   ServerEvent,
   Task,
@@ -168,6 +169,7 @@ export class TaskManager {
         task.inbox ??= [];
         task.handedOff ??= null;
         task.retro ??= null;
+        task.design ??= task.question?.images?.length ? task.question : null;
         if (task.retro?.state === 'running') task.retro = { ...task.retro, state: 'failed', error: 'interrupted by a restart of Steffe' };
         for (const a of task.agents) {
           a.pendingQuestion ??= null;
@@ -1331,20 +1333,36 @@ export class TaskManager {
       updateItem: (itemId, status, note) => run((t) => this.updateItem(t, caller, itemId, status as WorkItemStatus, note)),
       mergeItem: (itemId) => run((t) => this.mergeItem(t, itemId)),
       taskStatus: () => run((t) => this.statusText(t)),
-      askUser: (question, images, links) =>
+      askUser: (question, sections, links) =>
         run(async (t) => {
           if (t.phase === 'triage' || t.phase === 'planning') {
             throw new Error(`you are talking with the user directly during ${t.phase}: ask in your reply and end your turn`);
           }
           const dir = artifactsDir(t);
-          const names: string[] = [];
-          for (const img of images) {
+          const fileName = async (img: string) => {
             const rel = relative(dir, img.startsWith('/') ? img : join(dir, img));
             if (!rel || rel.startsWith('..') || rel.includes(sep)) throw new Error(`${img} is not a file directly in ${dir}`);
             const ok = await stat(join(dir, rel)).then((st) => st.isFile(), () => false);
             if (!ok) throw new Error(`${img} does not exist`);
-            names.push(basename(rel));
+            return basename(rel);
+          };
+          // A design goes to the user as sections, never as one list of questions and a pile of screenshots.
+          const design = t.plan?.items.find((i) => i.kind === 'design' && i.status === 'awaiting_user');
+          if (design && !sections.some((sec) => sec.images.length)) {
+            throw new Error(
+              `"${design.title}" is with the user for review, so this is a design hand-off: keep only a one-line summary in question and pass the rest in sections. One section per open question, its text being that question (with your pick) and its images only the screenshots that show it (path under $STEFFE_ARTIFACTS, short caption); set pick: true where the screenshots are alternatives to choose from. Then one section per remaining screen. Take the screenshot paths from the designer's report`,
+            );
           }
+          const shown: DesignSection[] = [];
+          for (const sec of sections) {
+            if (sec.images.length > 4) {
+              throw new Error(`a section takes at most 4 screenshots (the ones its question is about); "${sec.text.slice(0, 60)}" has ${sec.images.length}. Split it: one section per question or screen`);
+            }
+            const imgs: DesignSection['images'] = [];
+            for (const i of sec.images) imgs.push({ name: await fileName(i.path), ...(i.caption?.trim() ? { caption: i.caption.trim() } : {}) });
+            shown.push({ text: sec.text, ...(sec.pick && imgs.length > 1 ? { pick: true } : {}), images: imgs });
+          }
+          const names = [...new Set(shown.flatMap((sec) => sec.images.map((i) => i.name)))];
           for (const l of links) {
             let u: URL;
             try {
@@ -1358,9 +1376,11 @@ export class TaskManager {
             id: randomUUID(),
             text: question,
             askedAt: now(),
+            ...(shown.length ? { sections: shown } : {}),
             ...(names.length ? { images: names } : {}),
             ...(links.length ? { links } : {}),
           };
+          if (names.length) t.design = t.question;
           t.phase = 'escalated';
           return 'Question sent to the user. End your turn now; the answer will arrive as a [steffe] message.';
         }),

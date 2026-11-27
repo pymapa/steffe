@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Attachment, PermissionRequest, SessionSummary, Task, TaskAgent, TranscriptEntry, WorkItem } from '@steffe/shared';
 import { api } from '../lib/api';
 import { STATUS_LABEL, taskStatus } from '../lib/taskStatus';
-import { ImageLightbox } from './ImageLightbox';
+import { DesignModal } from './DesignModal';
 import { Markdown } from './Markdown';
 import { RetroView } from './RetroView';
 import { Composer, SessionView } from './SessionView';
@@ -36,24 +36,13 @@ export function TaskView({ task, sessions, transcripts, permissions, ensureTrans
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteBranches, setDeleteBranches] = useState(false);
-  const [lightbox, setLightbox] = useState<number | null>(null);
-  // Screenshots the user picked, e.g. one of several alternatives; named in the answer.
-  const [chosen, setChosen] = useState<string[]>([]);
-  const questionImages = (task.question?.images ?? []).map((name) => ({
-    name,
-    src: `/api/tasks/${task.id}/artifacts/${encodeURIComponent(name)}`,
-  }));
+  const [designOpen, setDesignOpen] = useState(false);
+  const designPending = !!task.question?.images?.length;
 
   useEffect(() => setAgentName(defaultAgent), [task.id, defaultAgent]);
-  useEffect(() => setChosen([]), [task.question?.id]);
-  const toggleChosen = (name: string) =>
-    setChosen((c) => (c.includes(name) ? c.filter((n) => n !== name) : [...c, name]));
-  const chosenList = chosen.map((n) => `\`${n}\``).join(', ');
   const sendAnswer = () =>
     act(async () => {
-      await api.answerTask(task.id, chosen.length ? `I choose the design shown in ${chosenList}.
-
-${answer}` : answer);
+      await api.answerTask(task.id, answer);
       setAnswer('');
     });
   useEffect(() => {
@@ -138,6 +127,12 @@ ${answer}` : answer);
             );
           })()}
           <span className="pill">${task.totalCostUsd.toFixed(2)}</span>
+          {task.design && (
+            <button className={designPending ? 'primary' : ''} onClick={() => setDesignOpen(true)}
+              title={designPending ? 'The design is waiting for your review' : 'The latest design the designer mocked up'}>
+              Design
+            </button>
+          )}
           {task.prUrl && (
             <a className="pill link-pill" href={task.prUrl} target="_blank" rel="noreferrer">PR ↗</a>
           )}
@@ -208,66 +203,37 @@ ${answer}` : answer);
       )}
       {error && <div className="error banner">{error}</div>}
       {task.lastError && <div className="error banner">{task.lastError}</div>}
-      {task.question && (
-        <div className="question">
+      {task.question && designPending && (
+        <div className="question design-ready">
           <div>
-            <strong>{task.question.images?.length ? 'A design is ready for your review' : 'The orchestrator needs your input'}</strong>
+            <strong>A design is ready for your review</strong>
+            <div className="muted">
+              {task.question.images!.length} screenshot{task.question.images!.length === 1 ? '' : 's'}, with the orchestrator's questions next to them.
+            </div>
+          </div>
+          <button className="primary" onClick={() => setDesignOpen(true)}>Review design</button>
+        </div>
+      )}
+      {task.question && !designPending && (
+        <div className="question">
+          <div className="question-body">
+            <strong>The orchestrator needs your input</strong>
             <Markdown>{task.question.text}</Markdown>
-            {task.question.links && task.question.links.length > 0 && (
-              <div className="question-links">
-                {task.question.links.map((l) => (
-                  <a key={l.url} className="button-link" href={l.url} target="_blank" rel="noreferrer" title={l.url}>
-                    {l.label} ↗
-                  </a>
-                ))}
-              </div>
-            )}
-            {questionImages.length > 0 && (
-              <div className="question-images">
-                {questionImages.map((img, i) => (
-                  <figure key={img.name} className={chosen.includes(img.name) ? 'chosen' : undefined}>
-                    <button className="image-thumb" title={img.name} onClick={() => setLightbox(i)}>
-                      <img src={img.src} alt={img.name} />
-                    </button>
-                    <figcaption>
-                      <span className="muted" title={img.name}>{img.name}</span>
-                      <button className={`small${chosen.includes(img.name) ? ' primary' : ''}`} title="Choose this design"
-                        onClick={() => toggleChosen(img.name)}>
-                        {chosen.includes(img.name) ? '✓ Chosen' : 'Choose'}
-                      </button>
-                    </figcaption>
-                  </figure>
-                ))}
-              </div>
-            )}
-            {lightbox !== null && (
-              <ImageLightbox images={questionImages} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)}
-                chosen={chosen} onToggleChosen={toggleChosen} />
-            )}
           </div>
           <div className="input-row">
             <textarea value={answer} onChange={(e) => setAnswer(e.target.value)} rows={2}
-              placeholder={task.question.images?.length ? 'Tweaks you want, or approve as is…' : 'Your answer…'}
+              placeholder="Your answer…"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && answer.trim()) {
                   void sendAnswer();
                 }
               }} />
-            <button className="primary" disabled={busy || !answer.trim()}
-              onClick={() => void sendAnswer()}>
-              {task.question.images?.length ? 'Request tweaks' : 'Answer'}
-            </button>
-            {task.question.images && task.question.images.length > 0 && (
-              <button className="primary" disabled={busy || !!answer.trim()}
-                title={chosen.length ? `Approve ${chosen.join(', ')} as shown` : 'Approve the design as shown'}
-                onClick={() => act(() => api.answerTask(task.id, chosen.length
-                  ? `I approve the design shown in ${chosenList}, as shown.`
-                  : 'I approve this design as shown.'))}>
-                {chosen.length ? 'Approve chosen' : 'Approve design'}
-              </button>
-            )}
+            <button className="primary" disabled={busy || !answer.trim()} onClick={() => void sendAnswer()}>Answer</button>
           </div>
         </div>
+      )}
+      {task.design && (
+        <DesignModal task={task} design={task.design} open={designOpen} onClose={() => setDesignOpen(false)} />
       )}
       <div className="task-body" style={{ '--task-left': leftW.css } as React.CSSProperties}>
         <div className="resize-handle at-task-left" {...leftW.handleProps} />

@@ -387,10 +387,23 @@ export interface TaskAgent {
   activeMs: number;
 }
 
+/** One open question or screen of a design, with the screenshots that show it. */
+export interface DesignSection {
+  /** Markdown: the question or what is shown. */
+  text: string;
+  /** The screenshots are alternatives (A or B): the user picks one. Otherwise they only illustrate. */
+  pick?: boolean;
+  /** File names under GET /api/tasks/:id/artifacts/, alternatives side by side. */
+  images: { name: string; caption?: string }[];
+}
+
 export interface TaskQuestion {
   id: string;
+  /** Markdown. For a design: the summary above its sections. */
   text: string;
-  /** Screenshots to show with the question (file names under GET /api/tasks/:id/artifacts/). */
+  /** A design: each question followed by its own screenshots. */
+  sections?: DesignSection[];
+  /** Every screenshot of the question, in order (file names under GET /api/tasks/:id/artifacts/). */
   images?: string[];
   /** Live pages to open, e.g. a designer's mock running in the app on its private port. */
   links?: { label: string; url: string }[];
@@ -424,6 +437,11 @@ export interface Task {
   handedOff: string | null;
   agents: TaskAgent[];
   question: TaskQuestion | null;
+  /**
+   * The latest design handed to the user: the last question that came with screenshots.
+   * Kept after it is answered, so the design can be looked at for the rest of the task.
+   */
+  design?: TaskQuestion | null;
   report: string | null;
   prUrl: string | null;
   /**

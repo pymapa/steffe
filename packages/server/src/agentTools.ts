@@ -22,7 +22,11 @@ export interface ToolHost {
   updateItem(itemId: string, status: string, note: string | undefined): Promise<string>;
   mergeItem(itemId: string): Promise<string>;
   taskStatus(): Promise<string>;
-  askUser(question: string, images: string[], links: { label: string; url: string }[]): Promise<string>;
+  askUser(
+    question: string,
+    sections: { text: string; pick?: boolean; images: { path: string; caption?: string }[] }[],
+    links: { label: string; url: string }[],
+  ): Promise<string>;
   finish(prTitle: string, report: string, draft: boolean, keepValidators: boolean, pr: number | null): Promise<string>;
   report(outcome: string, summary: string): Promise<string>;
   askOrchestrator(question: string): Promise<string>;
@@ -162,17 +166,35 @@ export function steffeServer(host: ToolHost, allowed: string[]): McpSdkServerCon
       'ask_user',
       'Escalate a question to the user, or hand them a design to approve. Returns immediately; end your turn and the answer arrives as a [steffe] message.',
       {
-        question: z.string(),
-        images: z
-          .array(z.string())
+        question: z.string().describe('markdown. With a design: only the one-line summary; the open questions go in sections'),
+        sections: z
+          .array(
+            z.object({
+              text: z.string().describe('one open question (with your pick), or what this screen or state shows'),
+              pick: z
+                .boolean()
+                .optional()
+                .describe('true when the screenshots are alternatives (A or B) and the user is to pick one of them; the answer names the pick'),
+              images: z
+                .array(
+                  z.object({
+                    path: z.string().describe('screenshot under $STEFFE_ARTIFACTS'),
+                    caption: z.string().optional().describe('a few words, e.g. "A: sidebar"'),
+                  }),
+                )
+                .describe('only the screenshots that show this question: its alternatives or the screen it is about'),
+            }),
+          )
           .optional()
-          .describe('absolute paths of screenshots under $STEFFE_ARTIFACTS to show with the question (e.g. from a designer report)'),
+          .describe(
+            'a design: one section per open question, each with its own screenshots, then one per remaining screen. The user sees question, its pictures, next question, its pictures',
+          ),
         links: z
           .array(z.object({ label: z.string(), url: z.string().describe('http://localhost:<port>/...') }))
           .optional()
           .describe("live pages for the user to open, e.g. the designer's mock running in the app"),
       },
-      wrap(({ question, images, links }) => host.askUser(question, images ?? [], links ?? [])),
+      wrap(({ question, sections, links }) => host.askUser(question, sections ?? [], links ?? [])),
     ),
     tool(
       'finish',

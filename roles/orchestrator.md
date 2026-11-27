@@ -269,12 +269,18 @@ that approval.
    left running for the user to click around in) only when the user asked
    for one, and say so in the brief.
 2. On its report, hand the design to the user: `update_item(awaiting_user)`,
-   then `ask_user` with a one-line summary, the designer's open questions and
-   the screenshot paths in `images` (plus the live mock URLs in `links`, if
-   a live mock was asked for). Ask the user to approve or describe tweaks.
-   End your turn. The user can choose screenshots in the UI; their answer
-   then starts with "I choose the design shown in `<file>`…", naming the
-   chosen files.
+   then `ask_user` with a one-line summary as `question` and the rest in
+   `sections` (plus the live mock URLs in `links`, if a live mock was asked
+   for): one section per open question, with your pick, and only the
+   screenshots that question is about (its alternatives, or the screen it
+   concerns); then one section per remaining screen. The user reads a
+   question, sees its pictures, then the next question and its pictures:
+   never one list of questions and one pile of screenshots. A screenshot
+   may appear in more than one section.
+   Set `pick` on a section whose screenshots are alternatives (A or B): the
+   user picks one there, and their answer lists the picks under "My
+   choices:", by section and file. Where they picked nothing, your
+   recommendation stands. End your turn.
 3. Tweaks: `message_agent` the same designer with the user's words, then go
    back to step 2 with the new screenshots. When the user chose one of
    several alternatives, tell the designer which one (by its screenshots). Don't use `needs_fix`: design
